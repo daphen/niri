@@ -2422,19 +2422,21 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         let scale = self.scale;
         let col_xs = self.column_xs(self.data.iter().copied());
         zip(self.columns.iter().enumerate(), col_xs).flat_map(move |((col_idx, col), col_x)| {
-            col.tiles().enumerate().map(move |(tile_idx, (tile, tile_off))| {
-                // Tile position within the workspace view. Excludes animated
-                // offsets (matching the floating equivalent) to avoid IPC spam.
-                let pos = Point::from((col_x - view_pos, 0.)) + tile_off;
-                let pos = pos.to_physical_precise_round(scale).to_logical(scale);
-                let layout = WindowLayout {
-                    // Our indices are 1-based, consistent with the actions.
-                    pos_in_scrolling_layout: Some((col_idx + 1, tile_idx + 1)),
-                    tile_pos_in_workspace_view: Some(pos.into()),
-                    ..tile.ipc_layout_template()
-                };
-                (tile, layout)
-            })
+            col.tiles()
+                .enumerate()
+                .map(move |(tile_idx, (tile, tile_off))| {
+                    // Tile position within the workspace view. Excludes animated
+                    // offsets (matching the floating equivalent) to avoid IPC spam.
+                    let pos = Point::from((col_x - view_pos, 0.)) + tile_off;
+                    let pos = pos.to_physical_precise_round(scale).to_logical(scale);
+                    let layout = WindowLayout {
+                        // Our indices are 1-based, consistent with the actions.
+                        pos_in_scrolling_layout: Some((col_idx + 1, tile_idx + 1)),
+                        tile_pos_in_workspace_view: Some(pos.into()),
+                        ..tile.ipc_layout_template()
+                    };
+                    (tile, layout)
+                })
         })
     }
 
