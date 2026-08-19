@@ -8,7 +8,7 @@ use input::event::gesture::GestureEventCoordinates as _;
 use niri_config::{
     Action, Bind, Binds, Config, Key, ModKey, Modifiers, MruDirection, SwitchBinds, Trigger,
 };
-use niri_ipc::LayoutSwitchTarget;
+use niri_ipc::{Event as IpcEvent, LayoutSwitchTarget, PaletteGesturePhase};
 use smithay::backend::input::{
     AbsolutePositionEvent, Axis, AxisSource, ButtonState, Device, DeviceCapability, Event,
     GestureBeginEvent, GestureEndEvent, GesturePinchUpdateEvent as _, GestureSwipeUpdateEvent as _,
@@ -68,8 +68,17 @@ pub mod swipe_tracker;
 pub mod touch_overview_grab;
 
 use backend_ext::{NiriInputBackend as InputBackend, NiriInputDevice as _};
+use swipe_tracker::SwipeTracker;
 
 pub const DOUBLE_CLICK_TIME: Duration = Duration::from_millis(400);
+
+#[derive(Debug)]
+pub enum PaletteGestureState {
+    Pending { x: f64, y: f64 },
+    Palette { tracker: SwipeTracker },
+    Overview { direction: f64 },
+    Ignored,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TabletData {
@@ -3941,8 +3950,13 @@ impl State {
             // We handled this event.
             return;
         } else if event.fingers() == 4 {
-            self.niri.layout.overview_gesture_begin();
-            self.niri.queue_redraw_all();
+            if self.niri.layout.is_overview_open() {
+                self.niri.layout.overview_gesture_begin();
+                self.niri.gesture_swipe_4f = Some(PaletteGestureState::Overview { direction: -1. });
+                self.niri.queue_redraw_all();
+            } else {
+                self.niri.gesture_swipe_4f = Some(PaletteGestureState::Pending { x: 0., y: 0. });
+            }
 
             // We handled this event.
             return;
@@ -4032,6 +4046,65 @@ impl State {
 
         let timestamp = Duration::from_micros(event.time());
 
+        if let Some(state) = self.niri.gesture_swipe_4f.take() {
+            let next = match state {
+                PaletteGestureState::Pending { mut x, mut y } => {
+                    x += delta_x;
+                    y += uninverted_delta_y;
+                    if x * x + y * y < 16. * 16. {
+                        PaletteGestureState::Pending { x, y }
+                    } else if x.abs() >= y.abs() {
+                        PaletteGestureState::Ignored
+                    } else if y < 0. {
+                        let mut tracker = SwipeTracker::new();
+                        tracker.push(-y, timestamp);
+                        let progress = (tracker.pos() / 300.).clamp(0., 1.);
+                        if let Some(ipc_server) = &self.niri.ipc_server {
+                            ipc_server.send_event(IpcEvent::PaletteGesture {
+                                phase: PaletteGesturePhase::Begin,
+                                progress,
+                                velocity: 0.,
+                                open: false,
+                            });
+                        }
+                        PaletteGestureState::Palette { tracker }
+                    } else {
+                        self.niri.layout.overview_gesture_begin();
+                        let _ = self.niri.layout.overview_gesture_update(y, timestamp);
+                        self.niri.queue_redraw_all();
+                        PaletteGestureState::Overview { direction: 1. }
+                    }
+                }
+                PaletteGestureState::Palette { mut tracker } => {
+                    tracker.push(-uninverted_delta_y, timestamp);
+                    let progress = (tracker.pos() / 300.).clamp(0., 1.);
+                    if let Some(ipc_server) = &self.niri.ipc_server {
+                        ipc_server.send_event(IpcEvent::PaletteGesture {
+                            phase: PaletteGesturePhase::Update,
+                            progress,
+                            velocity: tracker.velocity() / 300.,
+                            open: false,
+                        });
+                    }
+                    PaletteGestureState::Palette { tracker }
+                }
+                PaletteGestureState::Overview { direction } => {
+                    if self
+                        .niri
+                        .layout
+                        .overview_gesture_update(uninverted_delta_y * direction, timestamp)
+                        == Some(true)
+                    {
+                        self.niri.queue_redraw_all();
+                    }
+                    PaletteGestureState::Overview { direction }
+                }
+                PaletteGestureState::Ignored => PaletteGestureState::Ignored,
+            };
+            self.niri.gesture_swipe_4f = Some(next);
+            return;
+        }
+
         let mut handled = false;
         let res = self
             .niri
@@ -4088,6 +4161,32 @@ impl State {
 
     fn on_gesture_swipe_end<I: InputBackend>(&mut self, event: I::GestureSwipeEndEvent) {
         self.niri.gesture_swipe_3f_cumulative = None;
+
+        if let Some(state) = self.niri.gesture_swipe_4f.take() {
+            match state {
+                PaletteGestureState::Palette { mut tracker } => {
+                    tracker.push(0., Duration::from_micros(event.time()));
+                    let progress = (tracker.pos() / 300.).clamp(0., 1.);
+                    let velocity = tracker.velocity() / 300.;
+                    let open = !event.cancelled() && tracker.projected_end_pos() / 300. >= 0.5;
+                    if let Some(ipc_server) = &self.niri.ipc_server {
+                        ipc_server.send_event(IpcEvent::PaletteGesture {
+                            phase: PaletteGesturePhase::End,
+                            progress,
+                            velocity,
+                            open,
+                        });
+                    }
+                }
+                PaletteGestureState::Overview { .. } => {
+                    if self.niri.layout.overview_gesture_end() {
+                        self.niri.queue_redraw_all();
+                    }
+                }
+                PaletteGestureState::Pending { .. } | PaletteGestureState::Ignored => {}
+            }
+            return;
+        }
 
         let mut handled = false;
         let res = self.niri.layout.workspace_switch_gesture_end(Some(true));
