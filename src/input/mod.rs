@@ -18,6 +18,7 @@ use smithay::backend::input::{
     TabletToolTipState, TouchEvent,
 };
 use smithay::backend::libinput::LibinputInputBackend;
+use smithay::desktop::layer_map_for_output;
 use smithay::input::dnd::DnDGrab;
 use smithay::input::keyboard::{keysyms, FilterResult, Keysym, Layout, ModifiersState};
 use smithay::input::pointer::{
@@ -74,10 +75,38 @@ pub const DOUBLE_CLICK_TIME: Duration = Duration::from_millis(400);
 
 #[derive(Debug)]
 pub enum PaletteGestureState {
-    Pending { x: f64, y: f64 },
-    Palette { tracker: SwipeTracker },
-    Overview { direction: f64 },
+    Pending {
+        x: f64,
+        y: f64,
+        palette_open: bool,
+    },
+    Palette {
+        tracker: SwipeTracker,
+        opening: bool,
+    },
+    Overview {
+        direction: f64,
+    },
     Ignored,
+}
+
+fn palette_gesture_metrics(opening: bool, tracker: &SwipeTracker) -> (f64, f64) {
+    let progress = if opening {
+        tracker.pos() / 300.
+    } else {
+        1. - tracker.pos() / 300.
+    }
+    .clamp(0., 1.);
+    let velocity = tracker.velocity() / 300. * if opening { 1. } else { -1. };
+    (progress, velocity)
+}
+
+fn palette_gesture_should_open(opening: bool, cancelled: bool, projected_pos: f64) -> bool {
+    if opening {
+        !cancelled && projected_pos / 300. >= 0.5
+    } else {
+        cancelled || projected_pos / 300. < 0.5
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -3955,7 +3984,16 @@ impl State {
                 self.niri.gesture_swipe_4f = Some(PaletteGestureState::Overview { direction: -1. });
                 self.niri.queue_redraw_all();
             } else {
-                self.niri.gesture_swipe_4f = Some(PaletteGestureState::Pending { x: 0., y: 0. });
+                let palette_open = self.niri.sorted_outputs.iter().any(|output| {
+                    layer_map_for_output(output)
+                        .layers()
+                        .any(|surface| surface.namespace() == "qs-picker")
+                });
+                self.niri.gesture_swipe_4f = Some(PaletteGestureState::Pending {
+                    x: 0.,
+                    y: 0.,
+                    palette_open,
+                });
             }
 
             // We handled this event.
@@ -4048,45 +4086,58 @@ impl State {
 
         if let Some(state) = self.niri.gesture_swipe_4f.take() {
             let next = match state {
-                PaletteGestureState::Pending { mut x, mut y } => {
+                PaletteGestureState::Pending {
+                    mut x,
+                    mut y,
+                    palette_open,
+                } => {
                     x += delta_x;
                     y += uninverted_delta_y;
                     if x * x + y * y < 16. * 16. {
-                        PaletteGestureState::Pending { x, y }
+                        PaletteGestureState::Pending { x, y, palette_open }
                     } else if x.abs() >= y.abs() {
                         PaletteGestureState::Ignored
-                    } else if y < 0. {
+                    } else if (!palette_open && y < 0.) || (palette_open && y > 0.) {
+                        let opening = !palette_open;
                         let mut tracker = SwipeTracker::new();
-                        tracker.push(-y, timestamp);
-                        let progress = (tracker.pos() / 300.).clamp(0., 1.);
+                        tracker.push(if opening { -y } else { y }, timestamp);
+                        let (progress, velocity) = palette_gesture_metrics(opening, &tracker);
                         if let Some(ipc_server) = &self.niri.ipc_server {
                             ipc_server.send_event(IpcEvent::PaletteGesture {
                                 phase: PaletteGesturePhase::Begin,
                                 progress,
-                                velocity: 0.,
-                                open: false,
+                                velocity,
+                                open: palette_open,
                             });
                         }
-                        PaletteGestureState::Palette { tracker }
-                    } else {
+                        PaletteGestureState::Palette { tracker, opening }
+                    } else if !palette_open {
                         self.niri.layout.overview_gesture_begin();
                         let _ = self.niri.layout.overview_gesture_update(y, timestamp);
                         self.niri.queue_redraw_all();
                         PaletteGestureState::Overview { direction: 1. }
+                    } else {
+                        PaletteGestureState::Ignored
                     }
                 }
-                PaletteGestureState::Palette { mut tracker } => {
-                    tracker.push(-uninverted_delta_y, timestamp);
-                    let progress = (tracker.pos() / 300.).clamp(0., 1.);
+                PaletteGestureState::Palette {
+                    mut tracker,
+                    opening,
+                } => {
+                    tracker.push(
+                        uninverted_delta_y * if opening { -1. } else { 1. },
+                        timestamp,
+                    );
+                    let (progress, velocity) = palette_gesture_metrics(opening, &tracker);
                     if let Some(ipc_server) = &self.niri.ipc_server {
                         ipc_server.send_event(IpcEvent::PaletteGesture {
                             phase: PaletteGesturePhase::Update,
                             progress,
-                            velocity: tracker.velocity() / 300.,
-                            open: false,
+                            velocity,
+                            open: !opening,
                         });
                     }
-                    PaletteGestureState::Palette { tracker }
+                    PaletteGestureState::Palette { tracker, opening }
                 }
                 PaletteGestureState::Overview { direction } => {
                     if self
@@ -4164,11 +4215,17 @@ impl State {
 
         if let Some(state) = self.niri.gesture_swipe_4f.take() {
             match state {
-                PaletteGestureState::Palette { mut tracker } => {
+                PaletteGestureState::Palette {
+                    mut tracker,
+                    opening,
+                } => {
                     tracker.push(0., Duration::from_micros(event.time()));
-                    let progress = (tracker.pos() / 300.).clamp(0., 1.);
-                    let velocity = tracker.velocity() / 300.;
-                    let open = !event.cancelled() && tracker.projected_end_pos() / 300. >= 0.5;
+                    let (progress, velocity) = palette_gesture_metrics(opening, &tracker);
+                    let open = palette_gesture_should_open(
+                        opening,
+                        event.cancelled(),
+                        tracker.projected_end_pos(),
+                    );
                     if let Some(ipc_server) = &self.niri.ipc_server {
                         ipc_server.send_event(IpcEvent::PaletteGesture {
                             phase: PaletteGesturePhase::End,
@@ -5374,6 +5431,24 @@ mod tests {
 
     use super::*;
     use crate::animation::Clock;
+
+    #[test]
+    fn palette_gesture_metrics_mirror_for_close() {
+        let mut tracker = SwipeTracker::new();
+        tracker.push(75., Duration::ZERO);
+        assert_eq!(palette_gesture_metrics(true, &tracker).0, 0.25);
+        assert_eq!(palette_gesture_metrics(false, &tracker).0, 0.75);
+    }
+
+    #[test]
+    fn palette_close_settle_reverses_open_thresholds() {
+        assert!(palette_gesture_should_open(true, false, 151.));
+        assert!(!palette_gesture_should_open(true, false, 149.));
+        assert!(!palette_gesture_should_open(false, false, 151.));
+        assert!(palette_gesture_should_open(false, false, 149.));
+        assert!(!palette_gesture_should_open(true, true, 300.));
+        assert!(palette_gesture_should_open(false, true, 300.));
+    }
 
     #[test]
     fn bindings_suppress_keys() {
