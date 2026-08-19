@@ -480,6 +480,16 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                     Event::OverviewOpenedOrClosed { is_open: opened } => {
                         println!("Overview toggled: {opened}");
                     }
+                    Event::PaletteGesture {
+                        phase,
+                        progress,
+                        velocity,
+                        open,
+                    } => {
+                        println!(
+                            "Palette gesture: {phase:?}, progress {progress}, velocity {velocity}, open {open}"
+                        );
+                    }
                     Event::ConfigLoaded { failed } => {
                         let status = if failed {
                             "with an error"
