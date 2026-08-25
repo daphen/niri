@@ -1727,6 +1727,13 @@ pub enum Event {
         /// Whether the palette should settle open after the gesture ends.
         open: bool,
     },
+    /// Ctrl+h/l tab cycling over a focused Helium window.
+    PaletteTabCycle {
+        /// Horizontal step: -1 for h, 1 for l, 0 when Ctrl is released.
+        direction: i8,
+        /// Whether the palette should commit the currently previewed tab.
+        commit: bool,
+    },
     /// The configuration was reloaded.
     ///
     /// You will always receive this event when connecting to the event stream, indicating the last
@@ -2148,6 +2155,27 @@ mod tests {
                 progress: 0.75,
                 velocity: 1.25,
                 open: true,
+            }
+        ));
+    }
+
+    #[test]
+    fn palette_tab_cycle_event_json_roundtrip() {
+        let event = Event::PaletteTabCycle {
+            direction: -1,
+            commit: false,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert_eq!(
+            json,
+            r#"{"PaletteTabCycle":{"direction":-1,"commit":false}}"#
+        );
+        let decoded: Event = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            decoded,
+            Event::PaletteTabCycle {
+                direction: -1,
+                commit: false,
             }
         ));
     }
