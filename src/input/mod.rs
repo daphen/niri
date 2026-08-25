@@ -54,7 +54,7 @@ use crate::niri::{CastTarget, PointerVisibility, State};
 use crate::ui::mru::{WindowMru, WindowMruUi};
 use crate::ui::screenshot_ui::ScreenshotUi;
 use crate::utils::spawning::{spawn, spawn_sh};
-use crate::utils::{center, get_monotonic_time, CastSessionId, ResizeEdge};
+use crate::utils::{center, get_monotonic_time, with_toplevel_role, CastSessionId, ResizeEdge};
 
 pub mod backend_ext;
 pub mod click_grab;
@@ -107,6 +107,10 @@ fn palette_gesture_should_open(opening: bool, cancelled: bool, projected_pos: f6
     } else {
         cancelled || projected_pos / 300. < 0.5
     }
+}
+
+fn is_helium_app_id(app_id: Option<&str>) -> bool {
+    matches!(app_id, Some("browser-personal" | "browser-work"))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -572,6 +576,48 @@ impl State {
                         return FilterResult::Intercept(None);
                     } else {
                         return FilterResult::Forward;
+                    }
+                }
+
+                if this.niri.palette_tab_cycle_active
+                    && !pressed
+                    && matches!(modified, Keysym::Control_L | Keysym::Control_R)
+                {
+                    this.niri.palette_tab_cycle_active = false;
+                    if let Some(ipc_server) = &this.niri.ipc_server {
+                        ipc_server.send_event(IpcEvent::PaletteTabCycle {
+                            direction: 0,
+                            commit: true,
+                        });
+                    }
+                    return FilterResult::Forward;
+                }
+
+                let palette_cycle_direction = if pressed && modifiers == Modifiers::CTRL {
+                    match raw {
+                        Some(Keysym::h) => Some(-1),
+                        Some(Keysym::l) => Some(1),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                if let Some(direction) = palette_cycle_direction {
+                    let helium_focused = this.niri.layout.focus().is_some_and(|mapped| {
+                        with_toplevel_role(mapped.toplevel(), |role| {
+                            is_helium_app_id(role.app_id.as_deref())
+                        })
+                    });
+                    if helium_focused {
+                        this.niri.palette_tab_cycle_active = true;
+                        this.niri.suppressed_keys.insert(key_code);
+                        if let Some(ipc_server) = &this.niri.ipc_server {
+                            ipc_server.send_event(IpcEvent::PaletteTabCycle {
+                                direction,
+                                commit: false,
+                            });
+                        }
+                        return FilterResult::Intercept(None);
                     }
                 }
 
@@ -5448,6 +5494,14 @@ mod tests {
         assert!(palette_gesture_should_open(false, false, 149.));
         assert!(!palette_gesture_should_open(true, true, 300.));
         assert!(palette_gesture_should_open(false, true, 300.));
+    }
+
+    #[test]
+    fn palette_tab_cycle_is_scoped_to_helium() {
+        assert!(is_helium_app_id(Some("browser-personal")));
+        assert!(is_helium_app_id(Some("browser-work")));
+        assert!(!is_helium_app_id(Some("kitty")));
+        assert!(!is_helium_app_id(None));
     }
 
     #[test]

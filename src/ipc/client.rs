@@ -490,6 +490,9 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                             "Palette gesture: {phase:?}, progress {progress}, velocity {velocity}, open {open}"
                         );
                     }
+                    Event::PaletteTabCycle { direction, commit } => {
+                        println!("Palette tab cycle: direction {direction}, commit {commit}");
+                    }
                     Event::ConfigLoaded { failed } => {
                         let status = if failed {
                             "with an error"
