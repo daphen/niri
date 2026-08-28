@@ -164,9 +164,12 @@ impl Layout {
 
     pub fn plane_pan_and_pinch(args: Args) -> Self {
         let mut rv = Self::new(args);
-        for id in 0..4 {
-            rv.add_window(TestWindow::freeform(id), Some(PresetSize::Proportion(0.3)));
-        }
+        rv.add_window(TestWindow::freeform(0), Some(PresetSize::Proportion(0.3)));
+        rv.add_window(TestWindow::freeform(1), Some(PresetSize::Proportion(0.3)));
+        rv.layout.move_column_to_workspace_down(true);
+        rv.add_window(TestWindow::freeform(2), Some(PresetSize::Proportion(0.3)));
+        rv.layout.move_column_to_workspace_down(true);
+        rv.add_window(TestWindow::freeform(3), Some(PresetSize::Proportion(0.3)));
 
         rv.add_step(300, |l| {
             l.layout.plane_pan_begin(&l.output);
@@ -181,7 +184,7 @@ impl Layout {
                 &l.output,
                 Point::from((640., 360.)),
                 Point::from((-60., 40.)),
-                1.35,
+                0.5,
             );
         });
 
