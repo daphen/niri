@@ -1,0 +1,38 @@
+hotkey-overlay {
+    skip-at-startup
+}
+
+prefer-no-csd
+
+layout {
+    gaps 12
+    default-column-width { proportion 0.4; }
+}
+
+spawn-at-startup "foot" "-a" "niri-fixture" "-T" "Fixture A" "sleep" "infinity"
+spawn-at-startup "foot" "-a" "niri-fixture" "-T" "Fixture B" "sleep" "infinity"
+spawn-at-startup "foot" "-a" "niri-fixture" "-T" "Fixture C" "sleep" "infinity"
+spawn-at-startup "foot" "-a" "niri-fixture" "-T" "Fixture D" "sleep" "infinity"
+
+binds {
+    Alt+Return { spawn "foot" "-a" "niri-fixture" "-T" "Fixture" "sleep" "infinity"; }
+    Alt+Q repeat=false { close-window; }
+    Alt+O repeat=false { toggle-overview; }
+
+    Alt+Left  { focus-column-left; }
+    Alt+Down  { focus-window-down; }
+    Alt+Up    { focus-window-up; }
+    Alt+Right { focus-column-right; }
+
+    Alt+Ctrl+Left  { move-column-left; }
+    Alt+Ctrl+Down  { move-window-down; }
+    Alt+Ctrl+Up    { move-window-up; }
+    Alt+Ctrl+Right { move-column-right; }
+
+    Alt+Page_Down { focus-workspace-down; }
+    Alt+Page_Up   { focus-workspace-up; }
+    Alt+Ctrl+Page_Down { move-column-to-workspace-down; }
+    Alt+Ctrl+Page_Up   { move-column-to-workspace-up; }
+
+    Alt+Shift+E { quit skip-confirmation=true; }
+}

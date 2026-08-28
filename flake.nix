@@ -183,6 +183,8 @@
                 cargo
                 clippy
                 cargo-insta
+                foot
+                watchexec
                 ;
               inherit rustfmt';
             };
