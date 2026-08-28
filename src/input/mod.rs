@@ -4232,9 +4232,24 @@ impl State {
     }
 
     fn on_gesture_pinch_begin<I: InputBackend>(&mut self, event: I::GesturePinchBeginEvent) {
-        let serial = SERIAL_COUNTER.next_serial();
         let pointer = self.niri.seat.get_pointer().unwrap();
 
+        if self.niri.layout.is_overview_open() {
+            if let Some(output) = self.niri.output_under_cursor() {
+                let output_geo = self.niri.global_space.output_geometry(&output).unwrap();
+                let centroid = pointer.current_location() - output_geo.loc.to_f64();
+                if self.niri.plane_gesture.pinch_begin(
+                    &mut self.niri.layout,
+                    output.clone(),
+                    centroid,
+                ) {
+                    self.niri.queue_redraw(&output);
+                    return;
+                }
+            }
+        }
+
+        let serial = SERIAL_COUNTER.next_serial();
         if self.update_pointer_contents() {
             pointer.frame(self);
         }
@@ -4250,8 +4265,16 @@ impl State {
     }
 
     fn on_gesture_pinch_update<I: InputBackend>(&mut self, event: I::GesturePinchUpdateEvent) {
-        let pointer = self.niri.seat.get_pointer().unwrap();
+        if let Some(output) = self.niri.plane_gesture.pinch_update(
+            &mut self.niri.layout,
+            event.delta(),
+            event.scale(),
+        ) {
+            self.niri.queue_redraw(&output);
+            return;
+        }
 
+        let pointer = self.niri.seat.get_pointer().unwrap();
         if self.update_pointer_contents() {
             pointer.frame(self);
         }
@@ -4268,9 +4291,17 @@ impl State {
     }
 
     fn on_gesture_pinch_end<I: InputBackend>(&mut self, event: I::GesturePinchEndEvent) {
+        if let Some(output) = self
+            .niri
+            .plane_gesture
+            .pinch_end(&mut self.niri.layout, event.cancelled())
+        {
+            self.niri.queue_redraw(&output);
+            return;
+        }
+
         let serial = SERIAL_COUNTER.next_serial();
         let pointer = self.niri.seat.get_pointer().unwrap();
-
         if self.update_pointer_contents() {
             pointer.frame(self);
         }

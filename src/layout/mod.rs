@@ -42,6 +42,7 @@ use niri_config::{
     Config, CornerRadius, LayoutPart, PresetSize, Workspace as WorkspaceConfig, WorkspaceReference,
 };
 use niri_ipc::{ColumnDisplay, PositionChange, SizeChange, WindowLayout};
+use plane::{Plane, PlaneView};
 use scrolling::{Column, ColumnWidth};
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::utils::RescaleRenderElement;
@@ -3650,6 +3651,33 @@ impl<W: LayoutElement> Layout<W> {
         Some(monitor.output.clone())
     }
 
+    pub fn plane_pinch_begin(&mut self, output: &Output) -> Option<PlaneView> {
+        let monitor = self.monitor_for_output_mut(output)?;
+        Some(monitor.plane_pinch_begin())
+    }
+
+    pub fn plane_pinch_update(
+        &mut self,
+        output: &Output,
+        centroid: Point<f64, Logical>,
+        delta: Point<f64, Logical>,
+        scale_delta: f64,
+    ) -> Option<Output> {
+        let monitor = self.monitor_for_output_mut(output)?;
+        monitor.plane_pinch_update(centroid, delta, scale_delta);
+        Some(monitor.output.clone())
+    }
+
+    pub fn plane_pinch_end(
+        &mut self,
+        output: &Output,
+        restore: Option<PlaneView>,
+    ) -> Option<Output> {
+        let monitor = self.monitor_for_output_mut(output)?;
+        monitor.plane_pinch_end(restore);
+        Some(monitor.output.clone())
+    }
+
     pub fn workspace_switch_gesture_begin(&mut self, output: &Output, _is_touchpad: bool) {
         self.plane_pan_begin(output);
     }
@@ -5043,10 +5071,13 @@ impl<W: LayoutElement> Default for MonitorSet<W> {
 
 fn compute_overview_zoom(options: &Options, overview_progress: Option<f64>) -> f64 {
     // Clamp to some sane values.
-    let zoom = options.overview.zoom.clamp(0.0001, 0.75);
+    let zoom = options
+        .overview
+        .zoom
+        .clamp(Plane::MIN_SCALE, Plane::MAX_SCALE);
 
     if let Some(p) = overview_progress {
-        (1. - p * (1. - zoom)).max(0.0001)
+        (1. - p * (1. - zoom)).max(Plane::MIN_SCALE)
     } else {
         1.
     }

@@ -12,6 +12,12 @@ pub(super) struct Plane {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct PlaneView {
+    position: Point<f64, Logical>,
+    scale: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub(super) struct PlaneTransform {
     position: Point<f64, Logical>,
     scale: f64,
@@ -30,6 +36,9 @@ struct PlaneAnimation {
 }
 
 impl Plane {
+    pub(super) const MIN_SCALE: f64 = 0.0001;
+    pub(super) const MAX_SCALE: f64 = 0.75;
+
     pub(super) fn new(position: Point<f64, Logical>) -> Self {
         Self {
             position,
@@ -77,6 +86,36 @@ impl Plane {
             animation.y.offset(delta.y);
         }
         self.scale = scale;
+    }
+
+    pub(super) fn view(&mut self) -> PlaneView {
+        self.set_position(self.position());
+        PlaneView {
+            position: self.position,
+            scale: self.scale,
+        }
+    }
+
+    pub(super) fn scale_around_output(
+        &mut self,
+        centroid: Point<f64, Logical>,
+        output_delta: Point<f64, Logical>,
+        scale_delta: f64,
+        viewport: Size<f64, Logical>,
+    ) {
+        let pivot = self.transform().output_to_world(centroid, viewport);
+        let scale = (self.scale * scale_delta).clamp(Self::MIN_SCALE, Self::MAX_SCALE);
+        let scaled_viewport = viewport.upscale(scale);
+        let center_offset = (viewport.to_point() - scaled_viewport.to_point()).downscale(2.);
+        let position = pivot - (centroid + output_delta - center_offset).downscale(scale);
+
+        self.scale = scale;
+        self.set_position(position);
+    }
+
+    pub(super) fn set_view(&mut self, view: PlaneView) {
+        self.scale = view.scale;
+        self.set_position(view.position);
     }
 
     pub(super) fn update_bounds(

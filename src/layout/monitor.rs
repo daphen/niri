@@ -11,7 +11,7 @@ use smithay::output::Output;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
 use super::insert_hint_element::{InsertHintElement, InsertHintRenderElement};
-use super::plane::Plane;
+use super::plane::{Plane, PlaneView};
 use super::scrolling::{Column, ColumnWidth};
 use super::tile::Tile;
 use super::workspace::{
@@ -1436,6 +1436,27 @@ impl<W: LayoutElement> Monitor<W> {
             .output_delta_to_world(projected_output_delta, self.view_size);
         let target = self.plane.position() + projected_world_delta;
         self.animate_plane_to(target, self.options.animations.workspace_switch.0);
+    }
+
+    pub(super) fn plane_pinch_begin(&mut self) -> PlaneView {
+        self.plane.view()
+    }
+
+    pub(super) fn plane_pinch_update(
+        &mut self,
+        centroid: Point<f64, Logical>,
+        output_delta: Point<f64, Logical>,
+        scale_delta: f64,
+    ) {
+        self.update_plane_bounds();
+        self.plane
+            .scale_around_output(centroid, output_delta, scale_delta, self.view_size);
+    }
+
+    pub(super) fn plane_pinch_end(&mut self, restore: Option<PlaneView>) {
+        if let Some(view) = restore {
+            self.plane.set_view(view);
+        }
     }
 
     pub fn overview_zoom(&self) -> f64 {
