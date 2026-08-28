@@ -9,7 +9,7 @@ use smithay::backend::renderer::element::RenderElement;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::desktop::layer_map_for_output;
 use smithay::output::{Mode, Output, PhysicalProperties, Subpixel};
-use smithay::utils::{Physical, Size};
+use smithay::utils::{Logical, Physical, Point, Size};
 
 use super::{Args, TestCase};
 use crate::test_window::TestWindow;
@@ -157,6 +157,32 @@ impl Layout {
             let right_of = l.windows[0].clone();
             l.add_window_right_of(&right_of, win.clone(), Some(PresetSize::Proportion(0.5)));
             l.layout.start_open_animation_for_window(win.id());
+        });
+
+        rv
+    }
+
+    pub fn plane_pan_and_pinch(args: Args) -> Self {
+        let mut rv = Self::new(args);
+        for id in 0..4 {
+            rv.add_window(TestWindow::freeform(id), Some(PresetSize::Proportion(0.3)));
+        }
+
+        rv.add_step(300, |l| {
+            l.layout.plane_pan_begin(&l.output);
+            l.layout
+                .plane_pan_update(&l.output, Point::<f64, Logical>::from((180., 100.)));
+            l.layout.open_overview();
+        });
+        rv.add_step(700, |l| {
+            l.layout.advance_animations();
+            l.layout.plane_pinch_begin(&l.output);
+            l.layout.plane_pinch_update(
+                &l.output,
+                Point::from((640., 360.)),
+                Point::from((-60., 40.)),
+                1.35,
+            );
         });
 
         rv

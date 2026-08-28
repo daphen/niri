@@ -165,7 +165,7 @@ impl LayoutElement for TestWindow {
     }
 
     fn is_in_input_region(&self, _point: Point<f64, Logical>) -> bool {
-        false
+        true
     }
 
     fn request_size(
@@ -693,6 +693,48 @@ enum Op {
         timestamp: Duration,
     },
     OverviewGestureEnd,
+    PlanePanBegin {
+        #[proptest(strategy = "1..=5usize")]
+        output_idx: usize,
+    },
+    PlanePanUpdate {
+        #[proptest(strategy = "1..=5usize")]
+        output_idx: usize,
+        #[proptest(strategy = "-400f64..400f64")]
+        dx: f64,
+        #[proptest(strategy = "-400f64..400f64")]
+        dy: f64,
+    },
+    PlanePanEnd {
+        #[proptest(strategy = "1..=5usize")]
+        output_idx: usize,
+        #[proptest(strategy = "-400f64..400f64")]
+        dx: f64,
+        #[proptest(strategy = "-400f64..400f64")]
+        dy: f64,
+    },
+    PlanePinchBegin {
+        #[proptest(strategy = "1..=5usize")]
+        output_idx: usize,
+    },
+    PlanePinchUpdate {
+        #[proptest(strategy = "1..=5usize")]
+        output_idx: usize,
+        #[proptest(strategy = "0f64..1280f64")]
+        centroid_x: f64,
+        #[proptest(strategy = "0f64..720f64")]
+        centroid_y: f64,
+        #[proptest(strategy = "-400f64..400f64")]
+        dx: f64,
+        #[proptest(strategy = "-400f64..400f64")]
+        dy: f64,
+        #[proptest(strategy = "0.1f64..2f64")]
+        scale_delta: f64,
+    },
+    PlanePinchEnd {
+        #[proptest(strategy = "1..=5usize")]
+        output_idx: usize,
+    },
     InteractiveMoveBegin {
         #[proptest(strategy = "1..=5usize")]
         window: usize,
@@ -1560,6 +1602,54 @@ impl Op {
             }
             Op::OverviewGestureEnd => {
                 layout.overview_gesture_end();
+            }
+            Op::PlanePanBegin { output_idx } => {
+                let Some(output) = output(layout, output_idx) else {
+                    return;
+                };
+                layout.plane_pan_begin(&output);
+            }
+            Op::PlanePanUpdate { output_idx, dx, dy } => {
+                let Some(output) = output(layout, output_idx) else {
+                    return;
+                };
+                layout.plane_pan_update(&output, Point::from((dx, dy)));
+            }
+            Op::PlanePanEnd { output_idx, dx, dy } => {
+                let Some(output) = output(layout, output_idx) else {
+                    return;
+                };
+                layout.plane_pan_end(&output, Point::from((dx, dy)));
+            }
+            Op::PlanePinchBegin { output_idx } => {
+                let Some(output) = output(layout, output_idx) else {
+                    return;
+                };
+                layout.plane_pinch_begin(&output);
+            }
+            Op::PlanePinchUpdate {
+                output_idx,
+                centroid_x,
+                centroid_y,
+                dx,
+                dy,
+                scale_delta,
+            } => {
+                let Some(output) = output(layout, output_idx) else {
+                    return;
+                };
+                layout.plane_pinch_update(
+                    &output,
+                    Point::from((centroid_x, centroid_y)),
+                    Point::from((dx, dy)),
+                    scale_delta,
+                );
+            }
+            Op::PlanePinchEnd { output_idx } => {
+                let Some(output) = output(layout, output_idx) else {
+                    return;
+                };
+                layout.plane_pinch_end(&output, None);
             }
             Op::InteractiveMoveBegin {
                 window,
@@ -3695,6 +3785,173 @@ fn expel_pending_left_from_fullscreen_tabbed_column() {
     ];
 
     check_ops(ops);
+}
+
+fn output(layout: &Layout<TestWindow>, id: usize) -> Option<Output> {
+    let name = format!("output{id}");
+    layout
+        .outputs()
+        .find(|output| output.name() == name)
+        .cloned()
+}
+
+fn window_hit_center(
+    layout: &Layout<TestWindow>,
+    output: &Output,
+    window: usize,
+) -> Option<Point<f64, Logical>> {
+    let mut bounds: Option<(i32, i32, i32, i32)> = None;
+    for y in (5..720).step_by(10) {
+        for x in (5..1280).step_by(10) {
+            let point = Point::from((f64::from(x), f64::from(y)));
+            if layout
+                .window_under(output, point)
+                .is_some_and(|(win, _)| *win.id() == window)
+            {
+                bounds = Some(bounds.map_or((x, y, x, y), |(min_x, min_y, max_x, max_y)| {
+                    (min_x.min(x), min_y.min(y), max_x.max(x), max_y.max(y))
+                }));
+            }
+        }
+    }
+    bounds.map(|(min_x, min_y, max_x, max_y)| {
+        Point::from((f64::from(min_x + max_x) / 2., f64::from(min_y + max_y) / 2.))
+    })
+}
+
+#[test]
+fn plane_pan_moves_rendered_hit_target() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+    ]);
+    let output = output(&layout, 1).unwrap();
+    let before = window_hit_center(&layout, &output, 1).unwrap();
+
+    layout.plane_pan_begin(&output);
+    layout.plane_pan_update(&output, Point::from((120., 80.)));
+
+    let after = window_hit_center(&layout, &output, 1).unwrap();
+    let expected = before - Point::from((120., 80.));
+    assert_ne!(after, before);
+    assert_eq!(layout.window_under(&output, expected).unwrap().0.id(), &1);
+}
+
+#[test]
+fn focus_navigation_reveals_off_camera_window() {
+    let mut layout =
+        check_ops(
+            std::iter::once(Op::AddOutput(1)).chain((1..=4).map(|id| Op::AddWindow {
+                params: TestWindowParams::new(id),
+            })),
+        );
+    let output = output(&layout, 1).unwrap();
+    layout.activate_window(&1);
+    Op::CompleteAnimations.apply(&mut layout);
+    assert!(window_hit_center(&layout, &output, 4).is_none());
+
+    layout.focus_right();
+    layout.focus_right();
+    layout.focus_right();
+    Op::CompleteAnimations.apply(&mut layout);
+
+    assert_eq!(layout.focus().unwrap().id(), &4);
+    assert!(window_hit_center(&layout, &output, 4).is_some());
+}
+
+#[test]
+fn overview_pinch_keeps_centroid_clamps_and_cancels() {
+    let options = Options {
+        overview: niri_config::Overview {
+            zoom: 0.5,
+            min_zoom: 0.25,
+            max_zoom: 0.75,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut layout = check_ops_with_options(
+        options,
+        [
+            Op::AddOutput(1),
+            Op::AddWindow {
+                params: TestWindowParams::new(1),
+            },
+            Op::ToggleOverview,
+            Op::CompleteAnimations,
+        ],
+    );
+    let output = output(&layout, 1).unwrap();
+    let centroid = window_hit_center(&layout, &output, 1).unwrap();
+    let start = layout.plane_pinch_begin(&output).unwrap();
+
+    layout.plane_pinch_update(&output, centroid, Point::default(), 10.);
+    assert_eq!(
+        layout.monitor_for_output(&output).unwrap().overview_zoom(),
+        0.75
+    );
+    assert_eq!(layout.window_under(&output, centroid).unwrap().0.id(), &1);
+
+    layout.update_render_elements(Some(&output));
+    assert_eq!(
+        layout.monitor_for_output(&output).unwrap().overview_zoom(),
+        0.75
+    );
+
+    layout.plane_pinch_update(&output, centroid, Point::default(), 0.01);
+    assert_eq!(
+        layout.monitor_for_output(&output).unwrap().overview_zoom(),
+        0.25
+    );
+    assert_eq!(layout.window_under(&output, centroid).unwrap().0.id(), &1);
+
+    layout.plane_pinch_end(&output, Some(start));
+    assert_eq!(
+        layout.monitor_for_output(&output).unwrap().overview_zoom(),
+        0.5
+    );
+    assert_eq!(layout.window_under(&output, centroid).unwrap().0.id(), &1);
+}
+
+#[test]
+fn output_planes_pan_independently() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddOutput(2),
+        Op::FocusOutput(2),
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+    ]);
+    let output1 = output(&layout, 1).unwrap();
+    let output2 = output(&layout, 2).unwrap();
+    let before1 = window_hit_center(&layout, &output1, 1).unwrap();
+    let before2 = window_hit_center(&layout, &output2, 2).unwrap();
+
+    layout.plane_pan_begin(&output1);
+    layout.plane_pan_update(&output1, Point::from((120., 80.)));
+
+    assert_ne!(window_hit_center(&layout, &output1, 1).unwrap(), before1);
+    assert_eq!(window_hit_center(&layout, &output2, 2).unwrap(), before2);
+}
+
+#[test]
+fn floating_window_stays_in_output_space_during_plane_pan() {
+    let mut params = TestWindowParams::new(1);
+    params.is_floating = true;
+    let mut layout = check_ops([Op::AddOutput(1), Op::AddWindow { params }]);
+    let output = output(&layout, 1).unwrap();
+    let before = window_hit_center(&layout, &output, 1).unwrap();
+
+    layout.plane_pan_begin(&output);
+    layout.plane_pan_update(&output, Point::from((120., 80.)));
+
+    assert_eq!(window_hit_center(&layout, &output, 1).unwrap(), before);
 }
 
 #[test]
