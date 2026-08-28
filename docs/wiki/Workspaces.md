@@ -9,9 +9,11 @@ a separate page. Existing workspace actions and external workspace tools
 therefore continue to address the same row anchors.
 
 You can pan the plane continuously in both directions with a three-finger swipe,
-including diagonally. The same pan remains available in the Overview, where a
-pinch also changes the plane zoom continuously within the configured bounds.
-Panning alone does not change the focused window or active workspace row.
+including diagonally. The camera zooms out slightly during the swipe; releasing
+focuses the tiled window nearest the output center and springs that window into
+place while restoring the previous scale. The same pan remains available in the
+Overview, where a pinch also changes the plane zoom continuously within the
+configured bounds.
 
 You can select rows with `focus-workspace-down` and `focus-workspace-up`.
 Empty workspaces "in the middle" automatically disappear when you switch away from them.

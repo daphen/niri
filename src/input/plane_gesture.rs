@@ -18,6 +18,7 @@ enum ActiveGesture {
         output: Output,
         x: SwipeTracker,
         y: SwipeTracker,
+        start: PlaneView,
     },
     Pinch {
         output: Output,
@@ -29,11 +30,14 @@ enum ActiveGesture {
 
 impl PlaneGesture {
     pub(crate) fn begin<W: LayoutElement>(&mut self, layout: &mut Layout<W>, output: Output) {
-        layout.plane_pan_begin(&output);
+        let Some(start) = layout.plane_pan_begin(&output) else {
+            return;
+        };
         self.active = Some(ActiveGesture::Pan {
             output,
             x: SwipeTracker::new(),
             y: SwipeTracker::new(),
+            start,
         });
     }
 
@@ -43,7 +47,7 @@ impl PlaneGesture {
         delta: Point<f64, Logical>,
         timestamp: Duration,
     ) -> Option<Output> {
-        let ActiveGesture::Pan { output, x, y } = self.active.as_mut()? else {
+        let ActiveGesture::Pan { output, x, y, .. } = self.active.as_mut()? else {
             return None;
         };
         x.push(delta.x, timestamp);
@@ -60,6 +64,7 @@ impl PlaneGesture {
             output,
             mut x,
             mut y,
+            start,
         } = self.active.take()?
         else {
             return None;
@@ -70,7 +75,7 @@ impl PlaneGesture {
             x.projected_end_pos() - x.pos(),
             y.projected_end_pos() - y.pos(),
         ));
-        layout.plane_pan_end(&output, projected_delta)
+        layout.plane_pan_end(&output, projected_delta, start)
     }
 
     pub(crate) fn pinch_begin<W: LayoutElement>(

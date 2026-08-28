@@ -23,6 +23,7 @@ pub struct Layout {
     layout: niri::layout::Layout<TestWindow>,
     start_time: Duration,
     steps: HashMap<Duration, DynStepFn>,
+    plane_pan_start: Option<niri::layout::plane::PlaneView>,
 }
 
 impl Layout {
@@ -83,6 +84,7 @@ impl Layout {
             layout,
             start_time,
             steps: HashMap::new(),
+            plane_pan_start: None,
         }
     }
 
@@ -172,12 +174,18 @@ impl Layout {
         rv.add_window(TestWindow::freeform(3), Some(PresetSize::Proportion(0.3)));
 
         rv.add_step(300, |l| {
-            l.layout.plane_pan_begin(&l.output);
+            l.plane_pan_start = l.layout.plane_pan_begin(&l.output);
             l.layout
                 .plane_pan_update(&l.output, Point::<f64, Logical>::from((180., 100.)));
+        });
+        rv.add_step(550, |l| {
+            let start = l.plane_pan_start.take().unwrap();
+            l.layout.plane_pan_end(&l.output, Point::default(), start);
+        });
+        rv.add_step(900, |l| {
             l.layout.open_overview();
         });
-        rv.add_step(700, |l| {
+        rv.add_step(1300, |l| {
             l.layout.advance_animations();
             l.layout.plane_pinch_begin(&l.output);
             l.layout.plane_pinch_update(

@@ -9,6 +9,7 @@ pub(super) struct Plane {
     scale: f64,
     bounds: PlaneBounds,
     animation: Option<PlaneAnimation>,
+    scale_animation: Option<Animation>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -45,6 +46,7 @@ impl Plane {
                 max: position,
             },
             animation: None,
+            scale_animation: None,
         }
     }
 
@@ -55,7 +57,9 @@ impl Plane {
     }
 
     pub(super) fn scale(&self) -> f64 {
-        self.scale
+        self.scale_animation
+            .as_ref()
+            .map_or(self.scale, Animation::value)
     }
 
     pub(super) fn transform(&self) -> PlaneTransform {
@@ -83,14 +87,17 @@ impl Plane {
             animation.y.offset(delta.y);
         }
         self.scale = scale;
+        self.scale_animation = None;
     }
 
     pub(super) fn view(&mut self) -> PlaneView {
-        self.set_position(self.position());
-        PlaneView {
-            position: self.position,
-            scale: self.scale,
-        }
+        let position = self.position();
+        let scale = self.scale();
+        self.animation = None;
+        self.scale_animation = None;
+        self.position = position;
+        self.scale = scale;
+        PlaneView { position, scale }
     }
 
     pub(super) fn scale_around_output(
@@ -113,8 +120,10 @@ impl Plane {
     }
 
     pub(super) fn set_view(&mut self, view: PlaneView) {
+        self.animation = None;
+        self.scale_animation = None;
         self.scale = view.scale;
-        self.set_position(view.position);
+        self.position = self.clamp(view.position);
     }
 
     pub(super) fn update_bounds(
@@ -153,6 +162,19 @@ impl Plane {
         });
     }
 
+    pub(super) fn animate_to_view(
+        &mut self,
+        target: Point<f64, Logical>,
+        view: PlaneView,
+        clock: Clock,
+        config: AnimationConfig,
+    ) {
+        let current_scale = self.scale();
+        self.animate_to(target, clock.clone(), config);
+        self.scale = view.scale;
+        self.scale_animation = Some(Animation::new(clock, current_scale, view.scale, 0., config));
+    }
+
     pub(super) fn advance_animations(&mut self) {
         if self
             .animation
@@ -161,10 +183,17 @@ impl Plane {
         {
             self.animation = None;
         }
+        if self
+            .scale_animation
+            .as_ref()
+            .is_some_and(Animation::is_done)
+        {
+            self.scale_animation = None;
+        }
     }
 
     pub(super) fn is_animating(&self) -> bool {
-        self.animation.is_some()
+        self.animation.is_some() || self.scale_animation.is_some()
     }
 
     pub(super) fn output_delta_to_world(

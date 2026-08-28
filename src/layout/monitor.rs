@@ -1418,8 +1418,16 @@ impl<W: LayoutElement> Monitor<W> {
         self.animate_plane_to(target, self.options.animations.window_movement.0);
     }
 
-    pub(super) fn plane_pan_begin(&mut self) {
-        self.plane.set_position(self.plane.position());
+    pub(super) fn plane_pan_begin(&mut self) -> PlaneView {
+        self.update_plane_bounds();
+        let view = self.plane.view();
+        let center = self
+            .plane
+            .transform()
+            .output_to_world(self.view_size.to_point().downscale(2.), self.view_size);
+        self.plane
+            .set_scale_around(self.plane.scale() * 0.94, center, self.view_size);
+        view
     }
 
     pub(super) fn plane_pan_update(&mut self, output_delta: Point<f64, Logical>) {
@@ -1430,12 +1438,60 @@ impl<W: LayoutElement> Monitor<W> {
         self.plane.offset(world_delta);
     }
 
-    pub(super) fn plane_pan_end(&mut self, projected_output_delta: Point<f64, Logical>) {
-        let projected_world_delta = self
-            .plane
-            .output_delta_to_world(projected_output_delta, self.view_size);
-        let target = self.plane.position() + projected_world_delta;
-        self.animate_plane_to(target, self.options.animations.workspace_switch.0);
+    pub(super) fn plane_pan_target(&self) -> Option<(W::Id, Point<f64, Logical>)> {
+        let output_center = self.view_size.to_point().downscale(2.);
+        let transform = self.plane.transform();
+        let row_stride = self.row_stride();
+
+        self.workspaces
+            .iter()
+            .enumerate()
+            .flat_map(|(row, workspace)| {
+                workspace
+                    .scrolling()
+                    .tiles_with_render_positions()
+                    .filter(|(_, _, visible)| *visible)
+                    .map(move |(tile, position, _)| {
+                        let center = position + tile.tile_size().to_point().downscale(2.);
+                        let world_center = Point::from((
+                            workspace.tiled_view_x() + center.x,
+                            row as f64 * row_stride + center.y,
+                        ));
+                        let rendered_center =
+                            transform.world_to_output(world_center, self.view_size);
+                        let delta = rendered_center - output_center;
+                        (
+                            tile.window().id().clone(),
+                            world_center,
+                            delta.x * delta.x + delta.y * delta.y,
+                        )
+                    })
+            })
+            .min_by(|a, b| a.2.total_cmp(&b.2))
+            .map(|(id, center, _)| (id, center))
+    }
+
+    pub(super) fn plane_pan_settle(
+        &mut self,
+        world_center: Option<Point<f64, Logical>>,
+        projected_output_delta: Point<f64, Logical>,
+        view: PlaneView,
+    ) {
+        self.update_plane_bounds();
+        let target = if let Some(center) = world_center {
+            center - self.view_size.to_point().downscale(2.)
+        } else {
+            let projected_world_delta = self
+                .plane
+                .output_delta_to_world(projected_output_delta, self.view_size);
+            self.plane.position() + projected_world_delta
+        };
+        self.plane.animate_to_view(
+            target,
+            view,
+            self.clock.clone(),
+            self.options.animations.horizontal_view_movement.0,
+        );
     }
 
     pub(super) fn plane_pinch_begin(&mut self) -> PlaneView {

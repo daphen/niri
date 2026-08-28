@@ -672,20 +672,6 @@ enum Op {
     ViewOffsetGestureEnd {
         is_touchpad: Option<bool>,
     },
-    WorkspaceSwitchGestureBegin {
-        #[proptest(strategy = "1..=5usize")]
-        output_idx: usize,
-        is_touchpad: bool,
-    },
-    WorkspaceSwitchGestureUpdate {
-        #[proptest(strategy = "-400f64..400f64")]
-        delta: f64,
-        timestamp: Duration,
-        is_touchpad: bool,
-    },
-    WorkspaceSwitchGestureEnd {
-        is_touchpad: Option<bool>,
-    },
     OverviewGestureBegin,
     OverviewGestureUpdate {
         #[proptest(strategy = "-400f64..400f64")]
@@ -693,19 +679,7 @@ enum Op {
         timestamp: Duration,
     },
     OverviewGestureEnd,
-    PlanePanBegin {
-        #[proptest(strategy = "1..=5usize")]
-        output_idx: usize,
-    },
-    PlanePanUpdate {
-        #[proptest(strategy = "1..=5usize")]
-        output_idx: usize,
-        #[proptest(strategy = "-400f64..400f64")]
-        dx: f64,
-        #[proptest(strategy = "-400f64..400f64")]
-        dy: f64,
-    },
-    PlanePanEnd {
+    PlanePan {
         #[proptest(strategy = "1..=5usize")]
         output_idx: usize,
         #[proptest(strategy = "-400f64..400f64")]
@@ -1573,27 +1547,6 @@ impl Op {
             Op::ViewOffsetGestureEnd { is_touchpad } => {
                 layout.view_offset_gesture_end(is_touchpad);
             }
-            Op::WorkspaceSwitchGestureBegin {
-                output_idx: id,
-                is_touchpad,
-            } => {
-                let name = format!("output{id}");
-                let Some(output) = layout.outputs().find(|o| o.name() == name).cloned() else {
-                    return;
-                };
-
-                layout.workspace_switch_gesture_begin(&output, is_touchpad);
-            }
-            Op::WorkspaceSwitchGestureUpdate {
-                delta,
-                timestamp,
-                is_touchpad,
-            } => {
-                layout.workspace_switch_gesture_update(delta, timestamp, is_touchpad);
-            }
-            Op::WorkspaceSwitchGestureEnd { is_touchpad } => {
-                layout.workspace_switch_gesture_end(is_touchpad);
-            }
             Op::OverviewGestureBegin => {
                 layout.overview_gesture_begin();
             }
@@ -1603,23 +1556,15 @@ impl Op {
             Op::OverviewGestureEnd => {
                 layout.overview_gesture_end();
             }
-            Op::PlanePanBegin { output_idx } => {
+            Op::PlanePan { output_idx, dx, dy } => {
                 let Some(output) = output(layout, output_idx) else {
                     return;
                 };
-                layout.plane_pan_begin(&output);
-            }
-            Op::PlanePanUpdate { output_idx, dx, dy } => {
-                let Some(output) = output(layout, output_idx) else {
+                let Some(start) = layout.plane_pan_begin(&output) else {
                     return;
                 };
                 layout.plane_pan_update(&output, Point::from((dx, dy)));
-            }
-            Op::PlanePanEnd { output_idx, dx, dy } => {
-                let Some(output) = output(layout, output_idx) else {
-                    return;
-                };
-                layout.plane_pan_end(&output, Point::from((dx, dy)));
+                layout.plane_pan_end(&output, Point::default(), start);
             }
             Op::PlanePinchBegin { output_idx } => {
                 let Some(output) = output(layout, output_idx) else {
@@ -3916,6 +3861,37 @@ fn overview_pinch_keeps_centroid_clamps_and_cancels() {
 }
 
 #[test]
+fn plane_pan_zooms_and_focuses_nearest_center_on_release() {
+    let mut layout =
+        check_ops(
+            std::iter::once(Op::AddOutput(1)).chain((1..=4).map(|id| Op::AddWindow {
+                params: TestWindowParams::new(id),
+            })),
+        );
+    let output = output(&layout, 1).unwrap();
+    layout.activate_window(&4);
+    Op::CompleteAnimations.apply(&mut layout);
+
+    let start = layout.plane_pan_begin(&output).unwrap();
+    assert_eq!(
+        layout.monitor_for_output(&output).unwrap().overview_zoom(),
+        0.94
+    );
+    layout.plane_pan_update(&output, Point::from((-1000., 0.)));
+
+    layout.plane_pan_end(&output, Point::default(), start);
+    let focused = *layout.focus().unwrap().id();
+    assert_ne!(focused, 4);
+    Op::CompleteAnimations.apply(&mut layout);
+    assert_eq!(
+        layout.monitor_for_output(&output).unwrap().overview_zoom(),
+        1.
+    );
+    let center = window_hit_center(&layout, &output, focused).unwrap();
+    assert!((center.x - 640.).abs() <= 10.);
+}
+
+#[test]
 fn output_planes_pan_independently() {
     let mut layout = check_ops([
         Op::AddOutput(1),
@@ -3948,10 +3924,17 @@ fn floating_window_stays_in_output_space_during_plane_pan() {
     let output = output(&layout, 1).unwrap();
     let before = window_hit_center(&layout, &output, 1).unwrap();
 
-    layout.plane_pan_begin(&output);
+    let start = layout.plane_pan_begin(&output).unwrap();
     layout.plane_pan_update(&output, Point::from((120., 80.)));
 
     assert_eq!(window_hit_center(&layout, &output, 1).unwrap(), before);
+    layout.plane_pan_end(&output, Point::default(), start);
+    Op::CompleteAnimations.apply(&mut layout);
+    assert_eq!(layout.focus().unwrap().id(), &1);
+    assert_eq!(
+        layout.monitor_for_output(&output).unwrap().overview_zoom(),
+        1.
+    );
 }
 
 #[test]

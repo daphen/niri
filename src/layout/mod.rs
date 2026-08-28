@@ -3625,10 +3625,9 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
-    pub fn plane_pan_begin(&mut self, output: &Output) {
-        if let Some(monitor) = self.monitor_for_output_mut(output) {
-            monitor.plane_pan_begin();
-        }
+    pub fn plane_pan_begin(&mut self, output: &Output) -> Option<PlaneView> {
+        let monitor = self.monitor_for_output_mut(output)?;
+        Some(monitor.plane_pan_begin())
     }
 
     pub fn plane_pan_update(
@@ -3645,9 +3644,15 @@ impl<W: LayoutElement> Layout<W> {
         &mut self,
         output: &Output,
         projected_delta: Point<f64, Logical>,
+        view: PlaneView,
     ) -> Option<Output> {
+        let target = self.monitor_for_output(output)?.plane_pan_target();
+        let world_center = target.as_ref().map(|(_, center)| *center);
+        if let Some((window, _)) = target {
+            self.activate_window(&window);
+        }
         let monitor = self.monitor_for_output_mut(output)?;
-        monitor.plane_pan_end(projected_delta);
+        monitor.plane_pan_settle(world_center, projected_delta, view);
         Some(monitor.output.clone())
     }
 
@@ -3676,26 +3681,6 @@ impl<W: LayoutElement> Layout<W> {
         let monitor = self.monitor_for_output_mut(output)?;
         monitor.plane_pinch_end(restore);
         Some(monitor.output.clone())
-    }
-
-    pub fn workspace_switch_gesture_begin(&mut self, output: &Output, _is_touchpad: bool) {
-        self.plane_pan_begin(output);
-    }
-
-    pub fn workspace_switch_gesture_update(
-        &mut self,
-        delta_y: f64,
-        _timestamp: Duration,
-        _is_touchpad: bool,
-    ) -> Option<Option<Output>> {
-        let output = self.active_monitor_ref()?.output.clone();
-        self.plane_pan_update(&output, Point::from((0., delta_y)))
-            .map(Some)
-    }
-
-    pub fn workspace_switch_gesture_end(&mut self, _is_touchpad: Option<bool>) -> Option<Output> {
-        let output = self.active_monitor_ref()?.output.clone();
-        self.plane_pan_end(&output, Point::default())
     }
 
     pub fn view_offset_gesture_begin(
