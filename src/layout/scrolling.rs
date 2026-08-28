@@ -2403,16 +2403,23 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         zip(columns, offsets)
     }
 
-    pub fn columns_with_render_positions(
+    fn columns_with_render_positions_at(
         &self,
+        view_x: f64,
     ) -> impl Iterator<Item = (&Column<W>, Point<f64, Logical>)> {
-        let view_off = Point::from((-self.view_pos(), 0.));
+        let view_off = Point::from((-view_x, 0.));
         self.columns_in_render_order().map(move |(col, col_x)| {
             let col_off = Point::from((col_x, 0.));
             let col_render_off = col.render_offset();
             let pos = view_off + col_off + col_render_off;
             (col, pos)
         })
+    }
+
+    pub fn columns_with_render_positions(
+        &self,
+    ) -> impl Iterator<Item = (&Column<W>, Point<f64, Logical>)> {
+        self.columns_with_render_positions_at(self.view_pos())
     }
 
     pub fn columns_with_render_positions_mut(
@@ -2954,6 +2961,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         &self,
         mut ctx: RenderCtx<R>,
         xray_pos: XrayPos,
+        plane_view_x: f64,
         focus_ring: bool,
         layer: RenderLayer,
         push: &mut dyn FnMut(ScrollingSpaceRenderElement<R>),
@@ -2962,7 +2970,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
         // Draw the closing windows on top of the other windows.
         if layer.is_normal() {
-            let view_rect = Rectangle::new(Point::from((self.view_pos(), 0.)), self.view_size);
+            let view_rect = Rectangle::new(Point::from((plane_view_x, 0.)), self.view_size);
             for closing in self.closing_windows.iter().rev() {
                 let elem = closing.render(ctx.as_gles(), view_rect, scale);
                 push(elem.into());
@@ -2976,7 +2984,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         let mut first = true;
 
         // This matches self.tiles_with_render_positions().
-        for (col, col_pos) in self.columns_with_render_positions() {
+        for (col, col_pos) in self.columns_with_render_positions_at(plane_view_x) {
             // Skip columns belonging to a different render layer.
             if layer.is_normal() == col.is_moving_between_workspaces() {
                 first = false;

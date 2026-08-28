@@ -67,6 +67,8 @@ pub struct Monitor<W: LayoutElement> {
     pub(super) workspaces: Vec<Workspace<W>>,
     /// Index of the currently active workspace.
     pub(super) active_workspace_idx: usize,
+    /// Camera for the shared tiled plane.
+    camera: PlaneCamera,
     /// ID of the previously active workspace.
     pub(super) previous_workspace_id: Option<WorkspaceId>,
     /// In-progress switch between workspaces.
@@ -95,6 +97,12 @@ pub struct Monitor<W: LayoutElement> {
 pub enum WorkspaceSwitch {
     Animation(Animation),
     Gesture(WorkspaceSwitchGesture),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PlaneCamera {
+    position: Point<f64, Logical>,
+    scale: f64,
 }
 
 #[derive(Debug)]
@@ -336,6 +344,10 @@ impl<W: LayoutElement> Monitor<W> {
             working_area,
             workspaces,
             active_workspace_idx,
+            camera: PlaneCamera {
+                position: Point::from((0., active_workspace_idx as f64 * view_size.h * 1.1)),
+                scale: 1.,
+            },
             previous_workspace_id: None,
             insert_hint: None,
             insert_hint_element: InsertHintElement::new(options.layout.insert_hint),
@@ -457,6 +469,7 @@ impl<W: LayoutElement> Monitor<W> {
 
         let prev_active_idx = self.active_workspace_idx;
         self.active_workspace_idx = idx;
+        self.camera.position.y = idx as f64 * self.row_stride();
 
         let config = config.unwrap_or(self.options.animations.workspace_switch.0);
 
@@ -676,6 +689,8 @@ impl<W: LayoutElement> Monitor<W> {
             self.workspaces.remove(1);
             self.active_workspace_idx = 0;
         }
+
+        self.camera.position.y = self.active_workspace_idx as f64 * self.row_stride();
     }
 
     pub fn unname_workspace(&mut self, id: WorkspaceId) -> bool {
@@ -1234,6 +1249,7 @@ impl<W: LayoutElement> Monitor<W> {
         self.scale = self.output.current_scale();
         self.view_size = output_size(&self.output);
         self.working_area = compute_working_area(&self.output);
+        self.camera.position.y = self.active_workspace_idx as f64 * self.row_stride();
 
         for ws in &mut self.workspaces {
             ws.update_output_size();
@@ -1371,14 +1387,21 @@ impl<W: LayoutElement> Monitor<W> {
         self.workspace_size(zoom) + Size::from((0., gap))
     }
 
+    fn row_stride(&self) -> f64 {
+        self.view_size.h * 1.1
+    }
+
     pub fn overview_zoom(&self) -> f64 {
-        let progress = self.overview_progress.as_ref().map(|p| p.value());
-        compute_overview_zoom(&self.options, progress)
+        self.camera.scale
     }
 
     pub(super) fn set_overview_progress(&mut self, progress: Option<&super::OverviewProgress>) {
         let prev_render_idx = self.workspace_render_idx();
         self.overview_progress = progress.map(OverviewProgress::from);
+        self.camera.scale = compute_overview_zoom(
+            &self.options,
+            self.overview_progress.as_ref().map(|p| p.value()),
+        );
         let new_render_idx = self.workspace_render_idx();
 
         // If the view jumped (can happen when going from corrected to uncorrected render_idx, for
@@ -1473,33 +1496,24 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn workspaces_render_geo(&self) -> impl Iterator<Item = Rectangle<f64, Logical>> {
-        let scale = self.scale.fractional_scale();
-        let zoom = self.overview_zoom();
-
-        let ws_size = self.workspace_size(zoom);
-        let gap = self.workspace_gap(zoom);
-        let ws_height_with_gap = ws_size.h + gap;
-
-        let static_offset = (self.view_size.to_point() - ws_size.to_point()).downscale(2.);
+        let output_scale = self.scale.fractional_scale();
+        let camera = self.camera;
+        let row_stride = self.row_stride();
+        let row_size = self.view_size.upscale(camera.scale);
+        let static_offset = (self.view_size.to_point() - row_size.to_point()).downscale(2.);
         let static_offset = static_offset
-            .to_physical_precise_round(scale)
-            .to_logical(scale);
+            .to_physical_precise_round(output_scale)
+            .to_logical(output_scale);
 
-        let first_ws_y = -self.workspace_render_idx() * ws_height_with_gap;
-        let first_ws_y = round_logical_in_physical(scale, first_ws_y);
-
-        // Return position for one-past-last workspace too.
         (0..=self.workspaces.len()).map(move |idx| {
-            let y = first_ws_y + idx as f64 * ws_height_with_gap;
-            let loc = Point::from((0., y)) + static_offset;
+            let world_y = idx as f64 * row_stride;
+            let y = (world_y - camera.position.y) * camera.scale;
+            let y = round_logical_in_physical(output_scale, y);
+            let loc = (Point::from((0., y)) + static_offset)
+                .to_physical_precise_round(output_scale)
+                .to_logical(output_scale);
 
-            // Even though all components that go into loc are rounded to physical pixels, the
-            // floating point addition may lose precision. This can result for example in the
-            // current workspace having y = 0.0000000000002 and thus missing pointer hits at the
-            // monitor edge with y = 0. So, post-round the location too.
-            let loc = loc.to_physical_precise_round(scale).to_logical(scale);
-
-            Rectangle::new(loc, ws_size)
+            Rectangle::new(loc, row_size)
         })
     }
 
@@ -1685,9 +1699,6 @@ impl<W: LayoutElement> Monitor<W> {
         let _span = tracy_client::span!("Monitor::render_workspaces");
 
         let scale = self.scale.fractional_scale();
-        // Ceil the height in physical pixels.
-        let height = (self.view_size.h * scale).ceil() as i32;
-
         let zoom = self.overview_zoom();
 
         let insert_hint_render_loc = self
@@ -1706,44 +1717,32 @@ impl<W: LayoutElement> Monitor<W> {
             )
         };
 
-        // Draw in passes for correct Z ordering during window movement between workspaces:
-        // - floating windows moving between workspaces
-        // - normal floating windows
-        // - scrolling windows moving between workspaces
-        // - normal scrolling windows
-        for pass in 0..4 {
-            // Don't cull when drawing windows moving between workspaces so that windows moving to
-            // workspaces off-screen will still render.
-            let cull = matches!(pass, 1 | 3);
+        let floating = self.active_workspace_ref();
+        let floating_xray_pos = XrayPos::new(Point::default(), 1.);
+        let uncropped = Rectangle::new(
+            Point::from((-i32::MAX / 2, -i32::MAX / 2)),
+            Size::from((i32::MAX, i32::MAX)),
+        );
+        for layer in [RenderLayer::MovingBetweenWorkspaces, RenderLayer::Normal] {
+            floating.render_floating(ctx.r(), floating_xray_pos, focus_ring, layer, &mut |elem| {
+                let elem = CropRenderElement::from_element(elem, scale, uncropped).unwrap();
+                let elem = MonitorInnerRenderElement::from(elem);
+                let elem = RescaleRenderElement::from_element(elem, Point::default(), 1.);
+                push(RelocateRenderElement::from_element(
+                    elem,
+                    Point::default(),
+                    Relocate::Relative,
+                ));
+            });
+        }
 
-            // Crop the elements to prevent them overflowing, currently visible during a workspace
-            // switch.
-            //
-            // HACK: crop to infinite bounds at least horizontally where we
-            // know there's no workspace joining or monitor bounds, otherwise
-            // it will cut pixel shaders and mess up the coordinate space.
-            // There's also a damage tracking bug which causes glitched
-            // rendering for maximized GTK windows.
-            //
-            // FIXME: use proper bounds after fixing the Crop element.
-            //
-            // Also, check cull here to avoid cropping windows moving between workspaces.
-            //
-            // FIXME: for cull=true, it might be better visually to crop to a workspace-high region
-            // anchored to the window/column as it moves between workspaces, to prevent overflowing
-            // windows from appearing and disappearing.
-            let crop_bounds =
-                if cull && (self.workspace_switch.is_some() || self.overview_progress.is_some()) {
-                    Rectangle::new(
-                        Point::from((-i32::MAX / 2, 0)),
-                        Size::from((i32::MAX, height)),
-                    )
-                } else {
-                    Rectangle::new(
-                        Point::from((-i32::MAX / 2, -i32::MAX / 2)),
-                        Size::from((i32::MAX, i32::MAX)),
-                    )
-                };
+        for pass in 0..2 {
+            let cull = pass == 1;
+
+            let crop_bounds = Rectangle::new(
+                Point::from((-i32::MAX / 2, -i32::MAX / 2)),
+                Size::from((i32::MAX, i32::MAX)),
+            );
 
             for (ws, geo) in self.workspaces_with_render_geo_cull(cull) {
                 // Macro instead of closure because ws and insert hint have different elem types.
@@ -1761,54 +1760,25 @@ impl<W: LayoutElement> Monitor<W> {
 
                 let xray_pos = XrayPos::new(geo.loc, zoom);
 
-                match pass {
-                    0 => {
-                        ws.render_floating(
-                            ctx.r(),
-                            xray_pos,
-                            focus_ring,
-                            RenderLayer::MovingBetweenWorkspaces,
-                            push!(),
-                        );
-                    }
-                    1 => {
-                        ws.render_floating(
-                            ctx.r(),
-                            xray_pos,
-                            focus_ring,
-                            RenderLayer::Normal,
-                            push!(),
-                        );
-
-                        if let Some(loc) = insert_hint_render_loc {
-                            if loc.workspace == InsertWorkspace::Existing(ws.id()) {
-                                self.insert_hint_element.render(
-                                    ctx.renderer,
-                                    loc.location,
-                                    push!(),
-                                );
-                            }
+                let layer = if pass == 0 {
+                    RenderLayer::MovingBetweenWorkspaces
+                } else {
+                    if let Some(loc) = insert_hint_render_loc {
+                        if loc.workspace == InsertWorkspace::Existing(ws.id()) {
+                            self.insert_hint_element
+                                .render(ctx.renderer, loc.location, push!());
                         }
                     }
-                    2 => {
-                        ws.render_scrolling(
-                            ctx.r(),
-                            xray_pos,
-                            focus_ring,
-                            RenderLayer::MovingBetweenWorkspaces,
-                            push!(),
-                        );
-                    }
-                    _ => {
-                        ws.render_scrolling(
-                            ctx.r(),
-                            xray_pos,
-                            focus_ring,
-                            RenderLayer::Normal,
-                            push!(),
-                        );
-                    }
-                }
+                    RenderLayer::Normal
+                };
+                ws.render_scrolling(
+                    ctx.r(),
+                    xray_pos,
+                    self.camera.position.x,
+                    focus_ring,
+                    layer,
+                    push!(),
+                );
             }
         }
     }
