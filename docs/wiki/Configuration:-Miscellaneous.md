@@ -26,6 +26,8 @@ cursor {
 
 overview {
     zoom 0.5
+    min-zoom 0.1
+    max-zoom 0.75
     backdrop-color "#262626"
 
     workspace-shadow {
@@ -202,15 +204,20 @@ cursor {
 
 Settings for the [Overview](./Overview.md).
 
-#### `zoom`
+#### `zoom`, `min-zoom`, and `max-zoom`
 
-Control how much the workspaces zoom out in the overview.
-`zoom` ranges from 0 to 0.75 where lower values make everything smaller.
+`zoom` controls the scale used when the Overview opens. Pinching in the Overview
+changes the scale continuously between `min-zoom` and `max-zoom`; lower values
+make the tiled plane smaller. The defaults are 0.5, 0.1, and 0.75 respectively.
+
+The values must satisfy `0 < min-zoom <= zoom <= max-zoom <= 1`.
 
 ```kdl
-// Make workspaces four times smaller than normal in the overview.
+// Open at half size and allow pinching between one-fifth and four-fifths size.
 overview {
-    zoom 0.25
+    zoom 0.5
+    min-zoom 0.2
+    max-zoom 0.8
 }
 ```
 

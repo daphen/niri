@@ -42,7 +42,7 @@ use niri_config::{
     Config, CornerRadius, LayoutPart, PresetSize, Workspace as WorkspaceConfig, WorkspaceReference,
 };
 use niri_ipc::{ColumnDisplay, PositionChange, SizeChange, WindowLayout};
-use plane::{Plane, PlaneView};
+use plane::PlaneView;
 use scrolling::{Column, ColumnWidth};
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::utils::RescaleRenderElement;
@@ -5070,14 +5070,8 @@ impl<W: LayoutElement> Default for MonitorSet<W> {
 }
 
 fn compute_overview_zoom(options: &Options, overview_progress: Option<f64>) -> f64 {
-    // Clamp to some sane values.
-    let zoom = options
-        .overview
-        .zoom
-        .clamp(Plane::MIN_SCALE, Plane::MAX_SCALE);
-
     if let Some(p) = overview_progress {
-        (1. - p * (1. - zoom)).max(Plane::MIN_SCALE)
+        1. - p * (1. - options.overview.zoom)
     } else {
         1.
     }

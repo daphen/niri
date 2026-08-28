@@ -304,6 +304,13 @@ animations {
     // slowdown 3.0
 }
 
+// The Overview opens at `zoom`; pinching can zoom continuously between the bounds.
+overview {
+    zoom 0.5
+    min-zoom 0.1
+    max-zoom 0.75
+}
+
 // Window rules let you adjust behavior for individual windows.
 // Find more information on the wiki:
 // https://niri-wm.github.io/niri/Configuration:-Window-Rules

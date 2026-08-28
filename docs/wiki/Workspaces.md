@@ -2,8 +2,18 @@
 
 Niri has dynamic workspaces that can move between monitors.
 
-Each monitor contains an independent set of workspaces arranged vertically.
-You can switch between workspaces on a monitor with `focus-workspace-down` and `focus-workspace-up`.
+Each monitor has one continuous tiled plane. Workspaces are rows in that plane:
+they keep their existing names, IDs, window membership, and ordering, while
+workspace activation pans the shared camera to the row rather than switching to
+a separate page. Existing workspace actions and external workspace tools
+therefore continue to address the same row anchors.
+
+You can pan the plane continuously in both directions with a three-finger swipe,
+including diagonally. The same pan remains available in the Overview, where a
+pinch also changes the plane zoom continuously within the configured bounds.
+Panning alone does not change the focused window or active workspace row.
+
+You can select rows with `focus-workspace-down` and `focus-workspace-up`.
 Empty workspaces "in the middle" automatically disappear when you switch away from them.
 
 There's always one empty workspace at the end (at the bottom) of every monitor.
@@ -24,6 +34,8 @@ You can move a workspace to a different monitor using binds like `move-workspace
 
 When you disconnect a monitor, its workspaces will automatically move to a different monitor.
 But, they will also "remember" their original monitor, so when you reconnect it, the workspaces will automatically move back to it.
+A moved workspace becomes a row in the destination output's plane; each output
+always has its own independent plane and camera.
 
 > [!TIP]
 > From other tiling WMs, you may be used to thinking about workspaces like this: "These are all of my workspaces. I can show workspace X on my first monitor, and workspace Y on my second monitor."

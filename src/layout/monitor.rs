@@ -1449,8 +1449,14 @@ impl<W: LayoutElement> Monitor<W> {
         scale_delta: f64,
     ) {
         self.update_plane_bounds();
-        self.plane
-            .scale_around_output(centroid, output_delta, scale_delta, self.view_size);
+        self.plane.scale_around_output(
+            centroid,
+            output_delta,
+            scale_delta,
+            self.options.overview.min_zoom,
+            self.options.overview.max_zoom,
+            self.view_size,
+        );
     }
 
     pub(super) fn plane_pinch_end(&mut self, restore: Option<PlaneView>) {
@@ -1465,16 +1471,17 @@ impl<W: LayoutElement> Monitor<W> {
 
     pub(super) fn set_overview_progress(&mut self, progress: Option<&super::OverviewProgress>) {
         let prev_render_idx = self.workspace_render_idx();
+        let previous_value = self.overview_progress.as_ref().map(|p| p.value());
         self.overview_progress = progress.map(OverviewProgress::from);
-        let pivot = self.plane_scale_pivot();
-        self.plane.set_scale_around(
-            compute_overview_zoom(
-                &self.options,
-                self.overview_progress.as_ref().map(|p| p.value()),
-            ),
-            pivot,
-            self.view_size,
-        );
+        let current_value = self.overview_progress.as_ref().map(|p| p.value());
+        if previous_value != current_value {
+            let pivot = self.plane_scale_pivot();
+            self.plane.set_scale_around(
+                compute_overview_zoom(&self.options, current_value),
+                pivot,
+                self.view_size,
+            );
+        }
         let new_render_idx = self.workspace_render_idx();
 
         // If the view jumped (can happen when going from corrected to uncorrected render_idx, for

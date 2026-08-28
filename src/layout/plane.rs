@@ -36,9 +36,6 @@ struct PlaneAnimation {
 }
 
 impl Plane {
-    pub(super) const MIN_SCALE: f64 = 0.0001;
-    pub(super) const MAX_SCALE: f64 = 0.75;
-
     pub(super) fn new(position: Point<f64, Logical>) -> Self {
         Self {
             position,
@@ -101,10 +98,12 @@ impl Plane {
         centroid: Point<f64, Logical>,
         output_delta: Point<f64, Logical>,
         scale_delta: f64,
+        min_scale: f64,
+        max_scale: f64,
         viewport: Size<f64, Logical>,
     ) {
         let pivot = self.transform().output_to_world(centroid, viewport);
-        let scale = (self.scale * scale_delta).clamp(Self::MIN_SCALE, Self::MAX_SCALE);
+        let scale = (self.scale * scale_delta).clamp(min_scale, max_scale);
         let scaled_viewport = viewport.upscale(scale);
         let center_offset = (viewport.to_point() - scaled_viewport.to_point()).downscale(2.);
         let position = pivot - (centroid + output_delta - center_offset).downscale(scale);

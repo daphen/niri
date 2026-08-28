@@ -455,6 +455,25 @@ where
             }
         }
 
+        if recursion == 0 {
+            let overview = config.borrow().overview;
+            if !(0. < overview.min_zoom
+                && overview.min_zoom <= overview.zoom
+                && overview.zoom <= overview.max_zoom
+                && overview.max_zoom <= 1.)
+            {
+                let node = nodes
+                    .iter()
+                    .find(|node| &**node.node_name == "overview")
+                    .or_else(|| nodes.first())
+                    .unwrap();
+                ctx.emit_error(DecodeError::conversion(
+                    node,
+                    "overview zoom levels must satisfy 0 < min-zoom <= zoom <= max-zoom <= 1",
+                ));
+            }
+        }
+
         Ok(Self)
     }
 }
@@ -646,6 +665,34 @@ mod tests {
         let config = Config::parse_mem("").unwrap();
         assert_eq!(config.input.keyboard.repeat_delay, 600);
         assert_eq!(config.input.keyboard.repeat_rate, 25);
+    }
+
+    #[test]
+    fn parse_overview_zoom_bounds() {
+        let config =
+            Config::parse_mem("overview { zoom 0.4; min-zoom 0.2; max-zoom 0.8; }").unwrap();
+        assert_eq!(config.overview.zoom, 0.4);
+        assert_eq!(config.overview.min_zoom, 0.2);
+        assert_eq!(config.overview.max_zoom, 0.8);
+
+        let config = Config::parse_mem("overview { min-zoom 0.25; }").unwrap();
+        assert_eq!(config.overview.zoom, 0.5);
+        assert_eq!(config.overview.min_zoom, 0.25);
+        assert_eq!(config.overview.max_zoom, 0.75);
+    }
+
+    #[test]
+    fn reject_invalid_overview_zoom_bounds() {
+        for text in [
+            "overview { min-zoom -0.1; }",
+            "overview { min-zoom 0; }",
+            "overview { zoom 0.05; min-zoom 0.1; }",
+            "overview { zoom 0.8; max-zoom 0.75; }",
+            "overview { min-zoom 0.7; max-zoom 0.6; }",
+            "overview { max-zoom 1.1; }",
+        ] {
+            assert!(Config::parse_mem(text).is_err(), "config parsed: {text}");
+        }
     }
 
     #[track_caller]
@@ -1699,6 +1746,8 @@ mod tests {
             },
             overview: Overview {
                 zoom: 0.5,
+                min_zoom: 0.1,
+                max_zoom: 0.75,
                 backdrop_color: Color {
                     r: 0.15,
                     g: 0.15,
