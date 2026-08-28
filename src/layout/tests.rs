@@ -3938,6 +3938,40 @@ fn floating_window_stays_in_output_space_during_plane_pan() {
 }
 
 #[test]
+fn refresh_cleans_empty_source_after_moving_window_to_next_row() {
+    check_ops([
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddOutput(1),
+        Op::MoveWindowDownOrToWorkspaceDown,
+        Op::Refresh { is_active: false },
+    ]);
+}
+
+#[test]
+fn dnd_end_cleans_empty_rows_after_window_moves() {
+    check_ops([
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddOutput(1),
+        Op::AddOutput(4),
+        Op::MoveWindowToWorkspace {
+            window_id: None,
+            workspace_idx: 1,
+        },
+        Op::MoveWindowToWorkspaceDown(false),
+        Op::DndUpdate {
+            output_idx: 4,
+            px: 0.,
+            py: 0.,
+        },
+        Op::DndEnd,
+    ]);
+}
+
+#[test]
 fn workspace_render_geo_at_fractional_scale() {
     let ops = [
         Op::AddScaledOutput {

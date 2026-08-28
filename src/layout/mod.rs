@@ -4438,6 +4438,9 @@ impl<W: LayoutElement> Layout<W> {
 
         for mon in self.monitors_mut() {
             mon.dnd_scroll_gesture_end();
+            if mon.workspace_switch.is_none() {
+                mon.clean_up_workspaces();
+            }
         }
 
         for ws in self.workspaces_mut() {
@@ -4962,6 +4965,9 @@ impl<W: LayoutElement> Layout<W> {
                                 ws.view_offset_gesture_end(None);
                             }
                         }
+                    }
+                    if mon.workspace_switch.is_none() {
+                        mon.clean_up_workspaces();
                     }
                 }
             }
