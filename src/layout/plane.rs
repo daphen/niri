@@ -59,7 +59,23 @@ impl Plane {
         }
     }
 
-    pub(super) fn set_scale(&mut self, scale: f64) {
+    pub(super) fn set_scale_around(
+        &mut self,
+        scale: f64,
+        pivot: Point<f64, Logical>,
+        viewport: Size<f64, Logical>,
+    ) {
+        let output_pivot = self.transform().world_to_output(pivot, viewport);
+        let scaled_viewport = viewport.upscale(scale);
+        let center_offset = (viewport.to_point() - scaled_viewport.to_point()).downscale(2.);
+        let position = pivot - (output_pivot - center_offset).downscale(scale);
+        let delta = position - self.position();
+
+        self.position += delta;
+        if let Some(animation) = &mut self.animation {
+            animation.x.offset(delta.x);
+            animation.y.offset(delta.y);
+        }
         self.scale = scale;
     }
 
@@ -131,7 +147,7 @@ impl Plane {
 }
 
 impl PlaneTransform {
-    fn world_to_output(
+    pub(super) fn world_to_output(
         self,
         point: Point<f64, Logical>,
         viewport: Size<f64, Logical>,
@@ -141,7 +157,7 @@ impl PlaneTransform {
         (point - self.position).upscale(self.scale) + center_offset
     }
 
-    fn output_to_world(
+    pub(super) fn output_to_world(
         self,
         point: Point<f64, Logical>,
         viewport: Size<f64, Logical>,

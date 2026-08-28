@@ -1445,10 +1445,15 @@ impl<W: LayoutElement> Monitor<W> {
     pub(super) fn set_overview_progress(&mut self, progress: Option<&super::OverviewProgress>) {
         let prev_render_idx = self.workspace_render_idx();
         self.overview_progress = progress.map(OverviewProgress::from);
-        self.plane.set_scale(compute_overview_zoom(
-            &self.options,
-            self.overview_progress.as_ref().map(|p| p.value()),
-        ));
+        let pivot = self.plane_scale_pivot();
+        self.plane.set_scale_around(
+            compute_overview_zoom(
+                &self.options,
+                self.overview_progress.as_ref().map(|p| p.value()),
+            ),
+            pivot,
+            self.view_size,
+        );
         let new_render_idx = self.workspace_render_idx();
 
         // If the view jumped (can happen when going from corrected to uncorrected render_idx, for
@@ -1542,6 +1547,33 @@ impl<W: LayoutElement> Monitor<W> {
         }
     }
 
+    fn plane_scale_pivot(&self) -> Point<f64, Logical> {
+        let ws = self.active_workspace_ref();
+        let Some(rect) = ws.tiled_active_window_visual_rectangle() else {
+            return self
+                .plane
+                .transform()
+                .output_to_world(self.view_size.to_point().downscale(2.), self.view_size);
+        };
+        let center = rect.loc + rect.size.to_point().downscale(2.);
+        Point::from((
+            ws.tiled_view_x() + center.x,
+            self.active_workspace_idx as f64 * self.row_stride() + center.y,
+        ))
+    }
+
+    pub(super) fn workspace_point_from_output(
+        &self,
+        workspace_idx: usize,
+        pos_within_output: Point<f64, Logical>,
+    ) -> Point<f64, Logical> {
+        let world = self
+            .plane
+            .transform()
+            .output_to_world(pos_within_output, self.view_size);
+        world - Point::from((0., workspace_idx as f64 * self.row_stride()))
+    }
+
     pub fn workspaces_render_geo(&self) -> impl Iterator<Item = Rectangle<f64, Logical>> {
         let output_scale = self.scale.fractional_scale();
         let transform = self.plane.transform();
@@ -1624,18 +1656,29 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn window_under(&self, pos_within_output: Point<f64, Logical>) -> Option<(&W, HitType)> {
+        if let Some((win, hit)) = self
+            .active_workspace_ref()
+            .floating_window_under(pos_within_output)
+        {
+            return Some(if self.overview_progress.is_some() {
+                (win, hit.to_activate())
+            } else {
+                (win, hit)
+            });
+        }
+
         let (ws, geo) = self.workspace_under(pos_within_output)?;
+        let idx = self.idx_of_ws(ws.id()).unwrap();
+        let pos_within_workspace = self.workspace_point_from_output(idx, pos_within_output);
+        let (win, hit) = ws.scrolling_window_under(pos_within_workspace)?;
 
         if self.overview_progress.is_some() {
-            let zoom = self.overview_zoom();
-            let pos_within_workspace = (pos_within_output - geo.loc).downscale(zoom);
-            let (win, hit) = ws.window_under(pos_within_workspace)?;
             // During the overview animation, we cannot do input hits because we cannot really
             // represent scaled windows properly.
             Some((win, hit.to_activate()))
         } else {
-            let (win, hit) = ws.window_under(pos_within_output - geo.loc)?;
-            Some((win, hit.offset_win_pos(geo.loc)))
+            let offset = geo.loc + Point::from((ws.tiled_render_view_x(), 0.));
+            Some((win, hit.offset_win_pos(offset)))
         }
     }
 
@@ -1644,8 +1687,17 @@ impl<W: LayoutElement> Monitor<W> {
             return None;
         }
 
-        let (ws, geo) = self.workspace_under(pos_within_output)?;
-        ws.resize_edges_under(pos_within_output - geo.loc)
+        if let Some(edges) = self
+            .active_workspace_ref()
+            .floating_resize_edges_under(pos_within_output)
+        {
+            return Some(edges);
+        }
+
+        let (ws, _) = self.workspace_under(pos_within_output)?;
+        let idx = self.idx_of_ws(ws.id()).unwrap();
+        let pos_within_workspace = self.workspace_point_from_output(idx, pos_within_output);
+        ws.scrolling_resize_edges_under(pos_within_workspace)
     }
 
     pub(super) fn insert_position(

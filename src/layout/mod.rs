@@ -609,6 +609,7 @@ impl<W: LayoutElement> InteractiveMoveState<W> {
 
 impl<W: LayoutElement> InteractiveMoveData<W> {
     fn tile_render_location(&self, zoom: f64) -> Point<f64, Logical> {
+        let zoom = if self.is_floating { 1. } else { zoom };
         let scale = Scale::from(self.output.current_scale().fractional_scale());
         let window_size = self.tile.window_size();
         let pointer_offset_within_window = Point::from((
@@ -2659,14 +2660,14 @@ impl<W: LayoutElement> Layout<W> {
                 scrolled |= mon.dnd_scroll_gesture_scroll(pos_within_output, 1. / zoom);
 
                 if is_scrolling {
-                    if let Some((ws, geo)) = mon.workspace_under(pos_within_output) {
+                    if let Some((ws, _)) = mon.workspace_under(pos_within_output) {
                         let idx = mon.idx_of_ws(ws.id()).unwrap();
+                        let pos_within_workspace =
+                            mon.workspace_point_from_output(idx, pos_within_output);
                         let ws = &mut mon.workspaces[idx];
-                        // As far as the DnD scroll gesture is concerned, the workspace spans across
-                        // the whole monitor horizontally.
-                        let ws_pos = Point::from((0., geo.loc.y));
-                        scrolled |=
-                            ws.dnd_scroll_gesture_scroll(pos_within_output - ws_pos, 1. / zoom);
+                        let pos_within_view =
+                            pos_within_workspace - Point::from((ws.tiled_render_view_x(), 0.));
+                        scrolled |= ws.dnd_scroll_gesture_scroll(pos_within_view, 1. / zoom);
                     }
                 }
 
@@ -2896,18 +2897,17 @@ impl<W: LayoutElement> Layout<W> {
         let _span = tracy_client::span!("Layout::update_insert_hint::update");
 
         if let Some(mon) = self.monitor_for_output_mut(&move_.output) {
-            let zoom = mon.overview_zoom();
-            let (insert_ws, geo) = mon.insert_position(move_.pointer_pos_within_output);
+            let (insert_ws, _geo) = mon.insert_position(move_.pointer_pos_within_output);
             match insert_ws {
                 InsertWorkspace::Existing(ws_id) => {
                     let idx = mon.idx_of_ws(ws_id).unwrap();
-                    let ws = &mut mon.workspaces[idx];
                     let pos_within_workspace =
-                        (move_.pointer_pos_within_output - geo.loc).downscale(zoom);
+                        mon.workspace_point_from_output(idx, move_.pointer_pos_within_output);
+                    let ws = &mut mon.workspaces[idx];
                     let position = if move_.is_floating {
                         InsertPosition::Floating
                     } else {
-                        ws.scrolling_insert_position(pos_within_workspace)
+                        ws.scrolling_insert_position_in_plane(pos_within_workspace)
                     };
 
                     let border_width = move_.tile.effective_border_width().unwrap_or(0.);
@@ -3831,11 +3831,17 @@ impl<W: LayoutElement> Layout<W> {
             .unwrap();
         let window_offset = tile.window_loc();
 
-        let tile_pos = ws_geo.loc + tile_offset.upscale(zoom);
+        let tile_scale = if is_floating { 1. } else { zoom };
+        let tile_pos = if is_floating {
+            tile_offset
+        } else {
+            let tile_offset = tile_offset + Point::from((ws.tiled_render_view_x(), 0.));
+            ws_geo.loc + tile_offset.upscale(tile_scale)
+        };
 
         let pointer_offset_within_window =
-            start_pos_within_output - tile_pos - window_offset.upscale(zoom);
-        let window_size = tile.window_size().upscale(zoom);
+            start_pos_within_output - tile_pos - window_offset.upscale(tile_scale);
+        let window_size = tile.window_size().upscale(tile_scale);
         let pointer_ratio_within_window = (
             f64::clamp(pointer_offset_within_window.x / window_size.w, 0., 1.),
             f64::clamp(pointer_offset_within_window.y / window_size.h, 0., 1.),
@@ -3887,20 +3893,7 @@ impl<W: LayoutElement> Layout<W> {
                     return false;
                 }
 
-                let zoom = self.overview_zoom();
-                let delta = delta.downscale(zoom);
-
-                pointer_delta += delta;
-
-                let (cx, cy) = (pointer_delta.x, pointer_delta.y);
-                let sq_dist = cx * cx + cy * cy;
-
-                let factor = RubberBand {
-                    stiffness: 1.0,
-                    limit: 0.5,
-                }
-                .band(sq_dist / INTERACTIVE_MOVE_START_THRESHOLD);
-
+                let overview_zoom = self.overview_zoom();
                 let (is_floating, tile, workspace_config) = self
                     .workspaces_mut()
                     .find(|ws| ws.has_window(&window_id))
@@ -3915,6 +3908,17 @@ impl<W: LayoutElement> Layout<W> {
                         )
                     })
                     .unwrap();
+
+                let zoom = if is_floating { 1. } else { overview_zoom };
+                pointer_delta += delta.downscale(zoom);
+
+                let (cx, cy) = (pointer_delta.x, pointer_delta.y);
+                let sq_dist = cx * cx + cy * cy;
+                let factor = RubberBand {
+                    stiffness: 1.0,
+                    limit: 0.5,
+                }
+                .band(sq_dist / INTERACTIVE_MOVE_START_THRESHOLD);
                 tile.interactive_move_offset = pointer_delta.upscale(factor);
 
                 // Put it back to be able to easily return.
@@ -3953,7 +3957,17 @@ impl<W: LayoutElement> Layout<W> {
                             .unwrap();
 
                         let zoom = mon.overview_zoom();
-                        tile_pos = Some((ws_geo.loc + tile_offset.upscale(zoom), zoom));
+                        let tile_offset = if is_floating {
+                            tile_offset
+                        } else {
+                            tile_offset + Point::from((ws.tiled_render_view_x(), 0.))
+                        };
+                        let position = if is_floating {
+                            tile_offset
+                        } else {
+                            ws_geo.loc + tile_offset.upscale(zoom)
+                        };
+                        tile_pos = Some((position, if is_floating { 1. } else { zoom }));
                     }
                 }
 
@@ -4181,10 +4195,12 @@ impl<W: LayoutElement> Layout<W> {
                                 let position = if move_.is_floating {
                                     InsertPosition::Floating
                                 } else {
-                                    let pos_within_workspace =
-                                        (move_.pointer_pos_within_output - geo.loc).downscale(zoom);
+                                    let pos_within_workspace = mon.workspace_point_from_output(
+                                        ws_idx,
+                                        move_.pointer_pos_within_output,
+                                    );
                                     let ws = &mut mon.workspaces[ws_idx];
-                                    ws.scrolling_insert_position(pos_within_workspace)
+                                    ws.scrolling_insert_position_in_plane(pos_within_workspace)
                                 };
 
                                 (position, Some(geo.loc))
@@ -4270,10 +4286,9 @@ impl<W: LayoutElement> Layout<W> {
 
                         match insert_ws {
                             InsertWorkspace::Existing(_) => {
-                                if let Some(offset) = offset {
-                                    let pos = (tile_render_loc - offset).downscale(zoom);
-                                    let pos =
-                                        mon.workspaces[ws_idx].floating_logical_to_size_frac(pos);
+                                if offset.is_some() {
+                                    let pos = mon.workspaces[ws_idx]
+                                        .floating_logical_to_size_frac(tile_render_loc);
                                     tile.floating_pos = Some(pos);
                                 } else {
                                     error!(
@@ -4315,14 +4330,33 @@ impl<W: LayoutElement> Layout<W> {
                 let (tile, tile_offset, ws_geo) = mon
                     .workspaces_with_render_geo_mut(false)
                     .find_map(|(ws, geo)| {
+                        let render_view_x = ws.tiled_render_view_x();
                         ws.tiles_with_render_positions_mut(false)
                             .find(|(tile, _)| tile.window().id() == &win_id)
-                            .map(|(tile, tile_offset)| (tile, tile_offset, geo))
+                            .map(|(tile, tile_offset)| {
+                                let tile_offset = if matches!(position, InsertPosition::Floating) {
+                                    tile_offset
+                                } else {
+                                    tile_offset + Point::from((render_view_x, 0.))
+                                };
+                                (tile, tile_offset, geo)
+                            })
                     })
                     .unwrap();
-                let new_tile_render_loc = ws_geo.loc + tile_offset.upscale(zoom);
+                let new_tile_render_loc = if matches!(position, InsertPosition::Floating) {
+                    tile_offset
+                } else {
+                    ws_geo.loc + tile_offset.upscale(zoom)
+                };
 
-                tile.animate_move_from((tile_render_loc - new_tile_render_loc).downscale(zoom));
+                let tile_scale = if matches!(position, InsertPosition::Floating) {
+                    1.
+                } else {
+                    zoom
+                };
+                tile.animate_move_from(
+                    (tile_render_loc - new_tile_render_loc).downscale(tile_scale),
+                );
 
                 // Interactive move into floating barely animates (it doesn't really move after
                 // being dropped), so setting it as moving between workspaces would just cause it to

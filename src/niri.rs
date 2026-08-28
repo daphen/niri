@@ -3217,11 +3217,6 @@ impl Niri {
                         layers.layer_geometry(layer_surface).unwrap().loc.to_f64();
                     layer_pos_within_output += mapped.bob_offset();
 
-                    // Background and bottom layers move together with the workspaces.
-                    let mon = self.layout.monitor_for_output(output)?;
-                    let (_, geo) = mon.workspace_under(pos_within_output)?;
-                    layer_pos_within_output += geo.loc;
-
                     let surface_type = WindowSurfaceType::POPUP | WindowSurfaceType::SUBSURFACE;
                     layer_surface
                         .surface_under(pos_within_output - layer_pos_within_output, surface_type)
@@ -3378,15 +3373,6 @@ impl Niri {
                     let mut layer_pos_within_output =
                         layers.layer_geometry(layer_surface).unwrap().loc.to_f64();
                     layer_pos_within_output += mapped.bob_offset();
-
-                    // Background and bottom layers move together with the workspaces.
-                    if matches!(layer, Layer::Background | Layer::Bottom) {
-                        let mon = self.layout.monitor_for_output(output)?;
-                        let (_, geo) = mon.workspace_under(pos_within_output)?;
-                        layer_pos_within_output += geo.loc;
-                        // Don't need to deal with zoom here because in the overview background and
-                        // bottom layers don't receive input.
-                    }
 
                     let surface_type = if popup {
                         WindowSurfaceType::POPUP
@@ -4439,29 +4425,15 @@ impl Niri {
                 }};
             }
 
-            for (ws, geo) in mon.workspaces_with_render_geo() {
-                let ns = Some(ws.id().get() as usize);
-                let xray_pos = XrayPos::new(geo.loc, zoom);
-                push_popups_from_layer!(Layer::Bottom, ns, xray_pos, process!(geo));
-                push_popups_from_layer!(Layer::Background, ns, xray_pos, process!(geo));
-            }
+            push_popups_from_layer!(Layer::Bottom);
+            push_popups_from_layer!(Layer::Background);
 
             mon.render_workspaces(ctx.r(), focus_ring, &mut |elem| push(elem.into()));
 
-            for (ws, geo) in mon.workspaces_with_render_geo() {
-                // The render element namespace. This will be set to the workspace index for
-                // elements duplicated across workspaces (i.e. background and bottom layers) in
-                // order to have their non-xray framebuffer effects separated from each other.
-                //
-                // This doesn't have to correspond exactly to workspace id or idx, the only
-                // requirement is that there's only one framebuffer effect element with a given id +
-                // namespace on the frame at once. Id + namespace is used as the cache key in the
-                // damage tracker.
-                let ns = Some(ws.id().get() as usize);
-                let xray_pos = XrayPos::new(geo.loc, zoom);
-                push_normal_from_layer!(Layer::Bottom, ns, xray_pos, process!(geo));
-                push_normal_from_layer!(Layer::Background, ns, xray_pos, process!(geo));
+            push_normal_from_layer!(Layer::Bottom);
+            push_normal_from_layer!(Layer::Background);
 
+            for (ws, geo) in mon.workspaces_with_render_geo() {
                 process!(geo)(ws.render_background());
             }
         }
