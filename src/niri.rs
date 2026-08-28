@@ -131,6 +131,7 @@ use crate::dbus::gnome_shell_screenshot::{NiriToScreenshot, ScreenshotToNiri};
 use crate::frame_clock::FrameClock;
 use crate::handlers::{configure_lock_surface, XDG_ACTIVATION_TOKEN_TIMEOUT};
 use crate::input::pick_color_grab::PickColorGrab;
+use crate::input::plane_gesture::PlaneGesture;
 use crate::input::scroll_swipe_gesture::ScrollSwipeGesture;
 use crate::input::scroll_tracker::ScrollTracker;
 use crate::input::{
@@ -372,6 +373,7 @@ pub struct Niri {
     pub pointer_inside_hot_corner: bool,
     pub pointer_constraint_position_hint: Option<Point<f64, Logical>>,
     pub tablet_cursor_location: Option<Point<f64, Logical>>,
+    pub(crate) plane_gesture: PlaneGesture,
     pub gesture_swipe_3f_cumulative: Option<(f64, f64)>,
     pub gesture_swipe_4f: Option<PaletteGestureState>,
     pub palette_tab_cycle_active: bool,
@@ -2615,6 +2617,7 @@ impl Niri {
             pointer_inside_hot_corner: false,
             pointer_constraint_position_hint: None,
             tablet_cursor_location: None,
+            plane_gesture: PlaneGesture::default(),
             gesture_swipe_3f_cumulative: None,
             gesture_swipe_4f: None,
             palette_tab_cycle_active: false,

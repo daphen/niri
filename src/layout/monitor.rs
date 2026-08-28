@@ -11,6 +11,7 @@ use smithay::output::Output;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
 use super::insert_hint_element::{InsertHintElement, InsertHintRenderElement};
+use super::plane::Plane;
 use super::scrolling::{Column, ColumnWidth};
 use super::tile::Tile;
 use super::workspace::{
@@ -27,18 +28,9 @@ use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::solid_color::SolidColorRenderElement;
 use crate::render_helpers::xray::XrayPos;
 use crate::render_helpers::RenderCtx;
-use crate::rubber_band::RubberBand;
 use crate::utils::transaction::Transaction;
 use crate::utils::{
     output_size, round_logical_in_physical, round_logical_in_physical_max1, ResizeEdge,
-};
-
-/// Amount of touchpad movement to scroll the height of one workspace.
-const WORKSPACE_GESTURE_MOVEMENT: f64 = 300.;
-
-const WORKSPACE_GESTURE_RUBBER_BAND: RubberBand = RubberBand {
-    stiffness: 0.5,
-    limit: 0.05,
 };
 
 /// Amount of DnD edge scrolling to scroll the height of one workspace.
@@ -67,8 +59,8 @@ pub struct Monitor<W: LayoutElement> {
     pub(super) workspaces: Vec<Workspace<W>>,
     /// Index of the currently active workspace.
     pub(super) active_workspace_idx: usize,
-    /// Camera for the shared tiled plane.
-    camera: PlaneCamera,
+    /// Shared tiled plane for this output.
+    plane: Plane,
     /// ID of the previously active workspace.
     pub(super) previous_workspace_id: Option<WorkspaceId>,
     /// In-progress switch between workspaces.
@@ -99,12 +91,6 @@ pub enum WorkspaceSwitch {
     Gesture(WorkspaceSwitchGesture),
 }
 
-#[derive(Debug, Clone, Copy)]
-struct PlaneCamera {
-    position: Point<f64, Logical>,
-    scale: f64,
-}
-
 #[derive(Debug)]
 pub struct WorkspaceSwitchGesture {
     /// Index of the workspace where the gesture was started.
@@ -121,8 +107,6 @@ pub struct WorkspaceSwitchGesture {
     /// For example, if there's a workspace switch during a DnD scroll.
     animation: Option<Animation>,
     tracker: SwipeTracker,
-    /// Whether the gesture is controlled by the touchpad.
-    is_touchpad: bool,
     /// Whether the gesture is clamped to +-1 workspace around the center.
     is_clamped: bool,
 
@@ -336,7 +320,7 @@ impl<W: LayoutElement> Monitor<W> {
         let ws = Workspace::new(output.clone(), clock.clone(), options.clone());
         workspaces.push(ws);
 
-        Self {
+        let mut monitor = Self {
             output_name: output.name(),
             output,
             scale,
@@ -344,10 +328,10 @@ impl<W: LayoutElement> Monitor<W> {
             working_area,
             workspaces,
             active_workspace_idx,
-            camera: PlaneCamera {
-                position: Point::from((0., active_workspace_idx as f64 * view_size.h * 1.1)),
-                scale: 1.,
-            },
+            plane: Plane::new(Point::from((
+                0.,
+                active_workspace_idx as f64 * view_size.h * 1.1,
+            ))),
             previous_workspace_id: None,
             insert_hint: None,
             insert_hint_element: InsertHintElement::new(options.layout.insert_hint),
@@ -359,7 +343,9 @@ impl<W: LayoutElement> Monitor<W> {
             base_options,
             options,
             layout_config,
-        }
+        };
+        monitor.update_plane_bounds();
+        monitor
     }
 
     pub fn into_workspaces(mut self) -> Vec<Workspace<W>> {
@@ -469,9 +455,15 @@ impl<W: LayoutElement> Monitor<W> {
 
         let prev_active_idx = self.active_workspace_idx;
         self.active_workspace_idx = idx;
-        self.camera.position.y = idx as f64 * self.row_stride();
 
         let config = config.unwrap_or(self.options.animations.workspace_switch.0);
+        self.animate_plane_to(
+            Point::from((
+                self.active_workspace_ref().tiled_view_x(),
+                idx as f64 * self.row_stride(),
+            )),
+            config,
+        );
 
         match &mut self.workspace_switch {
             // During a DnD scroll, we want to visually animate even if idx matches the active idx.
@@ -690,7 +682,10 @@ impl<W: LayoutElement> Monitor<W> {
             self.active_workspace_idx = 0;
         }
 
-        self.camera.position.y = self.active_workspace_idx as f64 * self.row_stride();
+        let mut position = self.plane.position();
+        position.y = self.active_workspace_idx as f64 * self.row_stride();
+        self.plane.set_position(position);
+        self.update_plane_bounds();
     }
 
     pub fn unname_workspace(&mut self, id: WorkspaceId) -> bool {
@@ -1080,20 +1075,24 @@ impl<W: LayoutElement> Monitor<W> {
             None => (),
         }
 
+        self.plane.advance_animations();
         for ws in &mut self.workspaces {
             ws.advance_animations();
         }
     }
 
     pub(super) fn are_animations_ongoing(&self) -> bool {
-        self.workspace_switch
-            .as_ref()
-            .is_some_and(|s| s.is_animation_ongoing())
+        self.plane.is_animating()
+            || self
+                .workspace_switch
+                .as_ref()
+                .is_some_and(|s| s.is_animation_ongoing())
             || self.workspaces.iter().any(|ws| ws.are_animations_ongoing())
     }
 
     pub fn are_transitions_ongoing(&self) -> bool {
-        self.workspace_switch.is_some()
+        self.plane.is_animating()
+            || self.workspace_switch.is_some()
             || self
                 .workspaces
                 .iter()
@@ -1249,7 +1248,10 @@ impl<W: LayoutElement> Monitor<W> {
         self.scale = self.output.current_scale();
         self.view_size = output_size(&self.output);
         self.working_area = compute_working_area(&self.output);
-        self.camera.position.y = self.active_workspace_idx as f64 * self.row_stride();
+        let mut position = self.plane.position();
+        position.y = self.active_workspace_idx as f64 * self.row_stride();
+        self.plane.set_position(position);
+        self.update_plane_bounds();
 
         for ws in &mut self.workspaces {
             ws.update_output_size();
@@ -1391,17 +1393,62 @@ impl<W: LayoutElement> Monitor<W> {
         self.view_size.h * 1.1
     }
 
+    fn update_plane_bounds(&mut self) {
+        let content_width = self
+            .workspaces
+            .iter()
+            .map(Workspace::tiled_content_width)
+            .fold(0., f64::max);
+        let content_height =
+            self.workspaces.len().saturating_sub(1) as f64 * self.row_stride() + self.view_size.h;
+        self.plane
+            .update_bounds(self.view_size, Size::from((content_width, content_height)));
+    }
+
+    fn animate_plane_to(&mut self, target: Point<f64, Logical>, config: niri_config::Animation) {
+        self.update_plane_bounds();
+        self.plane.animate_to(target, self.clock.clone(), config);
+    }
+
+    pub(super) fn reveal_active_column(&mut self) {
+        let target = Point::from((
+            self.active_workspace_ref().tiled_view_x(),
+            self.active_workspace_idx as f64 * self.row_stride(),
+        ));
+        self.animate_plane_to(target, self.options.animations.window_movement.0);
+    }
+
+    pub(super) fn plane_pan_begin(&mut self) {
+        self.plane.set_position(self.plane.position());
+    }
+
+    pub(super) fn plane_pan_update(&mut self, output_delta: Point<f64, Logical>) {
+        let world_delta = self
+            .plane
+            .output_delta_to_world(output_delta, self.view_size);
+        self.update_plane_bounds();
+        self.plane.offset(world_delta);
+    }
+
+    pub(super) fn plane_pan_end(&mut self, projected_output_delta: Point<f64, Logical>) {
+        let projected_world_delta = self
+            .plane
+            .output_delta_to_world(projected_output_delta, self.view_size);
+        let target = self.plane.position() + projected_world_delta;
+        self.animate_plane_to(target, self.options.animations.workspace_switch.0);
+    }
+
     pub fn overview_zoom(&self) -> f64 {
-        self.camera.scale
+        self.plane.scale()
     }
 
     pub(super) fn set_overview_progress(&mut self, progress: Option<&super::OverviewProgress>) {
         let prev_render_idx = self.workspace_render_idx();
         self.overview_progress = progress.map(OverviewProgress::from);
-        self.camera.scale = compute_overview_zoom(
+        self.plane.set_scale(compute_overview_zoom(
             &self.options,
             self.overview_progress.as_ref().map(|p| p.value()),
-        );
+        ));
         let new_render_idx = self.workspace_render_idx();
 
         // If the view jumped (can happen when going from corrected to uncorrected render_idx, for
@@ -1497,23 +1544,18 @@ impl<W: LayoutElement> Monitor<W> {
 
     pub fn workspaces_render_geo(&self) -> impl Iterator<Item = Rectangle<f64, Logical>> {
         let output_scale = self.scale.fractional_scale();
-        let camera = self.camera;
+        let transform = self.plane.transform();
         let row_stride = self.row_stride();
-        let row_size = self.view_size.upscale(camera.scale);
-        let static_offset = (self.view_size.to_point() - row_size.to_point()).downscale(2.);
-        let static_offset = static_offset
-            .to_physical_precise_round(output_scale)
-            .to_logical(output_scale);
+        let view_size = self.view_size;
+        let workspace_count = self.workspaces.len();
 
-        (0..=self.workspaces.len()).map(move |idx| {
-            let world_y = idx as f64 * row_stride;
-            let y = (world_y - camera.position.y) * camera.scale;
-            let y = round_logical_in_physical(output_scale, y);
-            let loc = (Point::from((0., y)) + static_offset)
+        (0..=workspace_count).map(move |idx| {
+            let mut geometry = transform.row_geometry(idx, row_stride, view_size);
+            geometry.loc = geometry
+                .loc
                 .to_physical_precise_round(output_scale)
                 .to_logical(output_scale);
-
-            Rectangle::new(loc, row_size)
+            geometry
         })
     }
 
@@ -1771,14 +1813,7 @@ impl<W: LayoutElement> Monitor<W> {
                     }
                     RenderLayer::Normal
                 };
-                ws.render_scrolling(
-                    ctx.r(),
-                    xray_pos,
-                    self.camera.position.x,
-                    focus_ring,
-                    layer,
-                    push!(),
-                );
+                ws.render_scrolling(ctx.r(), xray_pos, 0., focus_ring, layer, push!());
             }
         }
     }
@@ -1813,24 +1848,6 @@ impl<W: LayoutElement> Monitor<W> {
         }
     }
 
-    pub fn workspace_switch_gesture_begin(&mut self, is_touchpad: bool) {
-        let center_idx = self.active_workspace_idx;
-        let current_idx = self.workspace_render_idx();
-
-        let gesture = WorkspaceSwitchGesture {
-            center_idx,
-            start_idx: current_idx,
-            current_idx,
-            animation: None,
-            tracker: SwipeTracker::new(),
-            is_touchpad,
-            is_clamped: !self.overview_open,
-            dnd_last_event_time: None,
-            dnd_nonzero_start_time: None,
-        };
-        self.workspace_switch = Some(WorkspaceSwitch::Gesture(gesture));
-    }
-
     pub fn dnd_scroll_gesture_begin(&mut self) {
         if let Some(WorkspaceSwitch::Gesture(WorkspaceSwitchGesture {
             dnd_last_event_time: Some(_),
@@ -1855,64 +1872,11 @@ impl<W: LayoutElement> Monitor<W> {
             current_idx,
             animation: None,
             tracker: SwipeTracker::new(),
-            is_touchpad: false,
             is_clamped: false,
             dnd_last_event_time: Some(self.clock.now_unadjusted()),
             dnd_nonzero_start_time: None,
         };
         self.workspace_switch = Some(WorkspaceSwitch::Gesture(gesture));
-    }
-
-    pub fn workspace_switch_gesture_update(
-        &mut self,
-        delta_y: f64,
-        timestamp: Duration,
-        is_touchpad: bool,
-    ) -> Option<bool> {
-        let Some(WorkspaceSwitch::Gesture(gesture)) = &self.workspace_switch else {
-            return None;
-        };
-
-        if gesture.is_touchpad != is_touchpad || gesture.dnd_last_event_time.is_some() {
-            return None;
-        }
-
-        let zoom = self.overview_zoom();
-        let total_height = if gesture.is_touchpad {
-            WORKSPACE_GESTURE_MOVEMENT
-        } else {
-            self.workspace_size_with_gap(1.).h
-        };
-
-        let Some(WorkspaceSwitch::Gesture(gesture)) = &mut self.workspace_switch else {
-            return None;
-        };
-
-        // Reduce the effect of zoom on the touchpad somewhat.
-        let delta_scale = if gesture.is_touchpad {
-            (zoom - 1.) / 2.5 + 1.
-        } else {
-            zoom
-        };
-
-        let delta_y = delta_y / delta_scale;
-        let mut rubber_band = WORKSPACE_GESTURE_RUBBER_BAND;
-        rubber_band.limit /= zoom;
-
-        gesture.tracker.push(delta_y, timestamp);
-
-        let pos = gesture.tracker.pos() / total_height;
-
-        let (min, max) = gesture.min_max(self.workspaces.len());
-        let new_idx = gesture.start_idx + pos;
-        let new_idx = rubber_band.clamp(min, max, new_idx);
-
-        if gesture.current_idx == new_idx {
-            return Some(false);
-        }
-
-        gesture.current_idx = new_idx;
-        Some(true)
     }
 
     pub fn dnd_scroll_gesture_scroll(&mut self, pos: Point<f64, Logical>, speed: f64) -> bool {
@@ -2000,76 +1964,20 @@ impl<W: LayoutElement> Monitor<W> {
         true
     }
 
-    pub fn workspace_switch_gesture_end(&mut self, is_touchpad: Option<bool>) -> bool {
-        let Some(WorkspaceSwitch::Gesture(gesture)) = &self.workspace_switch else {
-            return false;
-        };
-
-        if is_touchpad.is_some_and(|x| gesture.is_touchpad != x) {
-            return false;
-        }
-
-        let zoom = self.overview_zoom();
-        let total_height = if gesture.dnd_last_event_time.is_some() {
-            WORKSPACE_DND_EDGE_SCROLL_MOVEMENT
-        } else if gesture.is_touchpad {
-            WORKSPACE_GESTURE_MOVEMENT
-        } else {
-            self.workspace_size_with_gap(1.).h
-        };
-
-        let Some(WorkspaceSwitch::Gesture(gesture)) = &mut self.workspace_switch else {
-            return false;
-        };
-
-        // Take into account any idle time between the last event and now.
-        let now = self.clock.now_unadjusted();
-        gesture.tracker.push(0., now);
-
-        let mut rubber_band = WORKSPACE_GESTURE_RUBBER_BAND;
-        rubber_band.limit /= zoom;
-
-        let mut velocity = gesture.tracker.velocity() / total_height;
-        let current_pos = gesture.tracker.pos() / total_height;
-        let pos = gesture.tracker.projected_end_pos() / total_height;
-
-        let (min, max) = gesture.min_max(self.workspaces.len());
-        let new_idx = gesture.start_idx + pos;
-
-        let new_idx = new_idx.clamp(min, max);
-        let new_idx = new_idx.round() as usize;
-
-        velocity *= rubber_band.clamp_derivative(min, max, gesture.start_idx + current_pos);
-
-        if self.active_workspace_idx != new_idx {
-            self.previous_workspace_id = Some(self.workspaces[self.active_workspace_idx].id());
-        }
-
-        self.active_workspace_idx = new_idx;
-        self.workspace_switch = Some(WorkspaceSwitch::Animation(Animation::new(
-            self.clock.clone(),
-            gesture.current_idx,
-            new_idx as f64,
-            velocity,
-            self.options.animations.workspace_switch.0,
-        )));
-
-        true
-    }
-
     pub fn dnd_scroll_gesture_end(&mut self) {
-        if !matches!(
-            self.workspace_switch,
-            Some(WorkspaceSwitch::Gesture(WorkspaceSwitchGesture {
-                dnd_last_event_time: Some(_),
-                ..
-            }))
-        ) {
-            // Not a DnD scroll.
+        let Some(WorkspaceSwitch::Gesture(gesture)) = self.workspace_switch.take() else {
             return;
         };
+        if gesture.dnd_last_event_time.is_none() {
+            self.workspace_switch = Some(WorkspaceSwitch::Gesture(gesture));
+            return;
+        }
 
-        self.workspace_switch_gesture_end(None);
+        let idx = gesture
+            .current_idx
+            .round()
+            .clamp(0., (self.workspaces.len() - 1) as f64) as usize;
+        self.activate_workspace(idx);
     }
 
     pub fn scale(&self) -> smithay::output::Scale {

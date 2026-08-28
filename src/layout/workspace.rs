@@ -1881,6 +1881,14 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.insert_hint_area(position)
     }
 
+    pub(super) fn tiled_view_x(&self) -> f64 {
+        self.scrolling.target_view_pos()
+    }
+
+    pub(super) fn tiled_content_width(&self) -> f64 {
+        self.scrolling.content_width()
+    }
+
     pub fn view_offset_gesture_begin(&mut self, is_touchpad: bool) {
         self.scrolling.view_offset_gesture_begin(is_touchpad);
     }

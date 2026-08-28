@@ -81,6 +81,7 @@ pub mod focus_ring;
 pub mod insert_hint_element;
 pub mod monitor;
 pub mod opening_window;
+pub mod plane;
 pub mod scrolling;
 pub mod shadow;
 pub mod tab_indicator;
@@ -1808,36 +1809,41 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn move_left(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
+        let Some(monitor) = self.active_monitor() else {
             return;
         };
-        workspace.move_left();
+        monitor.active_workspace().move_left();
+        monitor.reveal_active_column();
     }
 
     pub fn move_right(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
+        let Some(monitor) = self.active_monitor() else {
             return;
         };
-        workspace.move_right();
+        monitor.active_workspace().move_right();
+        monitor.reveal_active_column();
     }
 
     pub fn move_column_to_first(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
+        let Some(monitor) = self.active_monitor() else {
             return;
         };
-        workspace.move_column_to_first();
+        monitor.active_workspace().move_column_to_first();
+        monitor.reveal_active_column();
     }
 
     pub fn move_column_to_last(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
+        let Some(monitor) = self.active_monitor() else {
             return;
         };
-        workspace.move_column_to_last();
+        monitor.active_workspace().move_column_to_last();
+        monitor.reveal_active_column();
     }
 
     pub fn move_column_left_or_to_output(&mut self, output: &Output) -> bool {
-        if let Some(workspace) = self.active_workspace_mut() {
-            if workspace.move_left() {
+        if let Some(monitor) = self.active_monitor() {
+            if monitor.active_workspace().move_left() {
+                monitor.reveal_active_column();
                 return false;
             }
         }
@@ -1847,8 +1853,9 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn move_column_right_or_to_output(&mut self, output: &Output) -> bool {
-        if let Some(workspace) = self.active_workspace_mut() {
-            if workspace.move_right() {
+        if let Some(monitor) = self.active_monitor() {
+            if monitor.active_workspace().move_right() {
+                monitor.reveal_active_column();
                 return false;
             }
         }
@@ -1858,10 +1865,11 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn move_column_to_index(&mut self, index: usize) {
-        let Some(workspace) = self.active_workspace_mut() else {
+        let Some(monitor) = self.active_monitor() else {
             return;
         };
-        workspace.move_column_to_index(index);
+        monitor.active_workspace().move_column_to_index(index);
+        monitor.reveal_active_column();
     }
 
     pub fn move_down(&mut self) {
@@ -1939,52 +1947,59 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn focus_left(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
+        let Some(monitor) = self.active_monitor() else {
             return;
         };
-        workspace.focus_left();
+        monitor.active_workspace().focus_left();
+        monitor.reveal_active_column();
     }
 
     pub fn focus_right(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
+        let Some(monitor) = self.active_monitor() else {
             return;
         };
-        workspace.focus_right();
+        monitor.active_workspace().focus_right();
+        monitor.reveal_active_column();
     }
 
     pub fn focus_column_first(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
+        let Some(monitor) = self.active_monitor() else {
             return;
         };
-        workspace.focus_column_first();
+        monitor.active_workspace().focus_column_first();
+        monitor.reveal_active_column();
     }
 
     pub fn focus_column_last(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
+        let Some(monitor) = self.active_monitor() else {
             return;
         };
-        workspace.focus_column_last();
+        monitor.active_workspace().focus_column_last();
+        monitor.reveal_active_column();
     }
 
     pub fn focus_column_right_or_first(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
+        let Some(monitor) = self.active_monitor() else {
             return;
         };
-        workspace.focus_column_right_or_first();
+        monitor.active_workspace().focus_column_right_or_first();
+        monitor.reveal_active_column();
     }
 
     pub fn focus_column_left_or_last(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
+        let Some(monitor) = self.active_monitor() else {
             return;
         };
-        workspace.focus_column_left_or_last();
+        monitor.active_workspace().focus_column_left_or_last();
+        monitor.reveal_active_column();
     }
 
     pub fn focus_column(&mut self, index: usize) {
-        let Some(workspace) = self.active_workspace_mut() else {
+        let Some(monitor) = self.active_monitor() else {
             return;
         };
-        workspace.focus_column(index);
+        monitor.active_workspace().focus_column(index);
+        monitor.reveal_active_column();
     }
 
     pub fn focus_window_up_or_output(&mut self, output: &Output) -> bool {
@@ -2010,8 +2025,9 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn focus_column_left_or_output(&mut self, output: &Output) -> bool {
-        if let Some(workspace) = self.active_workspace_mut() {
-            if workspace.focus_left() {
+        if let Some(monitor) = self.active_monitor() {
+            if monitor.active_workspace().focus_left() {
+                monitor.reveal_active_column();
                 return false;
             }
         }
@@ -2021,8 +2037,9 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn focus_column_right_or_output(&mut self, output: &Output) -> bool {
-        if let Some(workspace) = self.active_workspace_mut() {
-            if workspace.focus_right() {
+        if let Some(monitor) = self.active_monitor() {
+            if monitor.active_workspace().focus_right() {
+                monitor.reveal_active_column();
                 return false;
             }
         }
@@ -3607,62 +3624,50 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
-    pub fn workspace_switch_gesture_begin(&mut self, output: &Output, is_touchpad: bool) {
-        let monitors = match &mut self.monitor_set {
-            MonitorSet::Normal { monitors, .. } => monitors,
-            MonitorSet::NoOutputs { .. } => unreachable!(),
-        };
-
-        for monitor in monitors {
-            // Cancel the gesture on other outputs.
-            if &monitor.output != output {
-                monitor.workspace_switch_gesture_end(None);
-                continue;
-            }
-
-            monitor.workspace_switch_gesture_begin(is_touchpad);
+    pub fn plane_pan_begin(&mut self, output: &Output) {
+        if let Some(monitor) = self.monitor_for_output_mut(output) {
+            monitor.plane_pan_begin();
         }
+    }
+
+    pub fn plane_pan_update(
+        &mut self,
+        output: &Output,
+        delta: Point<f64, Logical>,
+    ) -> Option<Output> {
+        let monitor = self.monitor_for_output_mut(output)?;
+        monitor.plane_pan_update(delta);
+        Some(monitor.output.clone())
+    }
+
+    pub fn plane_pan_end(
+        &mut self,
+        output: &Output,
+        projected_delta: Point<f64, Logical>,
+    ) -> Option<Output> {
+        let monitor = self.monitor_for_output_mut(output)?;
+        monitor.plane_pan_end(projected_delta);
+        Some(monitor.output.clone())
+    }
+
+    pub fn workspace_switch_gesture_begin(&mut self, output: &Output, _is_touchpad: bool) {
+        self.plane_pan_begin(output);
     }
 
     pub fn workspace_switch_gesture_update(
         &mut self,
         delta_y: f64,
-        timestamp: Duration,
-        is_touchpad: bool,
+        _timestamp: Duration,
+        _is_touchpad: bool,
     ) -> Option<Option<Output>> {
-        let monitors = match &mut self.monitor_set {
-            MonitorSet::Normal { monitors, .. } => monitors,
-            MonitorSet::NoOutputs { .. } => return None,
-        };
-
-        for monitor in monitors {
-            if let Some(refresh) =
-                monitor.workspace_switch_gesture_update(delta_y, timestamp, is_touchpad)
-            {
-                if refresh {
-                    return Some(Some(monitor.output.clone()));
-                } else {
-                    return Some(None);
-                }
-            }
-        }
-
-        None
+        let output = self.active_monitor_ref()?.output.clone();
+        self.plane_pan_update(&output, Point::from((0., delta_y)))
+            .map(Some)
     }
 
-    pub fn workspace_switch_gesture_end(&mut self, is_touchpad: Option<bool>) -> Option<Output> {
-        let monitors = match &mut self.monitor_set {
-            MonitorSet::Normal { monitors, .. } => monitors,
-            MonitorSet::NoOutputs { .. } => return None,
-        };
-
-        for monitor in monitors {
-            if monitor.workspace_switch_gesture_end(is_touchpad) {
-                return Some(monitor.output.clone());
-            }
-        }
-
-        None
+    pub fn workspace_switch_gesture_end(&mut self, _is_touchpad: Option<bool>) -> Option<Output> {
+        let output = self.active_monitor_ref()?.output.clone();
+        self.plane_pan_end(&output, Point::default())
     }
 
     pub fn view_offset_gesture_begin(
@@ -3678,7 +3683,6 @@ impl<W: LayoutElement> Layout<W> {
 
         for monitor in monitors {
             for (idx, ws) in monitor.workspaces.iter_mut().enumerate() {
-                // Cancel the gesture on other workspaces.
                 if &monitor.output != output
                     || idx != workspace_idx.unwrap_or(monitor.active_workspace_idx)
                 {
@@ -3700,21 +3704,12 @@ impl<W: LayoutElement> Layout<W> {
         let zoom = self.overview_zoom();
         let delta_x = delta_x / zoom;
 
-        let monitors = match &mut self.monitor_set {
-            MonitorSet::Normal { monitors, .. } => monitors,
-            MonitorSet::NoOutputs { .. } => return None,
-        };
-
-        for monitor in monitors {
+        for monitor in self.monitors_mut() {
             for ws in &mut monitor.workspaces {
                 if let Some(refresh) =
                     ws.view_offset_gesture_update(delta_x, timestamp, is_touchpad)
                 {
-                    if refresh {
-                        return Some(Some(monitor.output.clone()));
-                    } else {
-                        return Some(None);
-                    }
+                    return Some(refresh.then(|| monitor.output.clone()));
                 }
             }
         }
@@ -3723,12 +3718,7 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn view_offset_gesture_end(&mut self, is_touchpad: Option<bool>) -> Option<Output> {
-        let monitors = match &mut self.monitor_set {
-            MonitorSet::Normal { monitors, .. } => monitors,
-            MonitorSet::NoOutputs { .. } => return None,
-        };
-
-        for monitor in monitors {
+        for monitor in self.monitors_mut() {
             for ws in &mut monitor.workspaces {
                 if ws.view_offset_gesture_end(is_touchpad) {
                     return Some(monitor.output.clone());
