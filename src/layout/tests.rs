@@ -3861,6 +3861,71 @@ fn overview_pinch_keeps_centroid_clamps_and_cancels() {
 }
 
 #[test]
+fn configured_workspace_row_gap_sets_plane_row_spacing() {
+    let row_centers = |gap| {
+        let mut options = Options::default();
+        options.layout.workspace_row_gap = gap;
+        let layout = check_ops_with_options(
+            options,
+            [
+                Op::AddOutput(1),
+                Op::AddWindow {
+                    params: TestWindowParams::new(1),
+                },
+                Op::FocusWorkspaceDown,
+                Op::AddWindow {
+                    params: TestWindowParams::new(2),
+                },
+                Op::ToggleOverview,
+                Op::CompleteAnimations,
+            ],
+        );
+        let output = output(&layout, 1).unwrap();
+        (
+            window_hit_center(&layout, &output, 1).unwrap(),
+            window_hit_center(&layout, &output, 2).unwrap(),
+        )
+    };
+
+    let without_gap = row_centers(0.);
+    let quarter_height_gap = row_centers(0.25);
+    assert!(
+        (without_gap.0.y - quarter_height_gap.0.y - 45.).abs() <= 10.,
+        "without gap: {without_gap:?}, quarter gap: {quarter_height_gap:?}"
+    );
+    assert_eq!(without_gap.1, quarter_height_gap.1);
+}
+
+#[test]
+fn configured_plane_pan_zoom_and_release_animation_are_used() {
+    let mut options = Options::default();
+    options.layout.plane_pan_zoom = 0.8;
+    options.animations.plane_pan_release.0.off = true;
+    let mut layout = check_ops_with_options(
+        options,
+        [
+            Op::AddOutput(1),
+            Op::AddWindow {
+                params: TestWindowParams::new(1),
+            },
+        ],
+    );
+    let output = output(&layout, 1).unwrap();
+
+    let start = layout.plane_pan_begin(&output).unwrap();
+    assert_eq!(
+        layout.monitor_for_output(&output).unwrap().overview_zoom(),
+        0.8
+    );
+    layout.plane_pan_end(&output, Point::default(), start);
+    Op::AdvanceAnimations { msec_delta: 0 }.apply(&mut layout);
+    assert_eq!(
+        layout.monitor_for_output(&output).unwrap().overview_zoom(),
+        1.
+    );
+}
+
+#[test]
 fn plane_pan_zooms_and_focuses_nearest_center_on_release() {
     let mut layout =
         check_ops(

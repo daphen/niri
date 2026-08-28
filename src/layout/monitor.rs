@@ -1380,7 +1380,7 @@ impl<W: LayoutElement> Monitor<W> {
 
     fn workspace_gap(&self, zoom: f64) -> f64 {
         let scale = self.scale.fractional_scale();
-        let gap = self.view_size.h * 0.1 * zoom;
+        let gap = self.view_size.h * self.options.layout.workspace_row_gap * zoom;
         round_logical_in_physical_max1(scale, gap)
     }
 
@@ -1390,7 +1390,7 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     fn row_stride(&self) -> f64 {
-        self.view_size.h * 1.1
+        self.view_size.h * (1. + self.options.layout.workspace_row_gap)
     }
 
     fn update_plane_bounds(&mut self) {
@@ -1425,8 +1425,11 @@ impl<W: LayoutElement> Monitor<W> {
             .plane
             .transform()
             .output_to_world(self.view_size.to_point().downscale(2.), self.view_size);
-        self.plane
-            .set_scale_around(self.plane.scale() * 0.94, center, self.view_size);
+        self.plane.set_scale_around(
+            self.plane.scale() * self.options.layout.plane_pan_zoom,
+            center,
+            self.view_size,
+        );
         view
     }
 
@@ -1490,7 +1493,7 @@ impl<W: LayoutElement> Monitor<W> {
             target,
             view,
             self.clock.clone(),
-            self.options.animations.horizontal_view_movement.0,
+            self.options.animations.plane_pan_release.0,
         );
     }
 

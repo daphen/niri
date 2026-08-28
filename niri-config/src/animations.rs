@@ -12,6 +12,7 @@ pub struct Animations {
     pub window_open: WindowOpenAnim,
     pub window_close: WindowCloseAnim,
     pub horizontal_view_movement: HorizontalViewMovementAnim,
+    pub plane_pan_release: PlanePanReleaseAnim,
     pub window_movement: WindowMovementAnim,
     pub window_resize: WindowResizeAnim,
     pub config_notification_open_close: ConfigNotificationOpenCloseAnim,
@@ -28,6 +29,7 @@ impl Default for Animations {
             slowdown: 1.,
             workspace_switch: Default::default(),
             horizontal_view_movement: Default::default(),
+            plane_pan_release: Default::default(),
             window_movement: Default::default(),
             window_open: Default::default(),
             window_close: Default::default(),
@@ -57,6 +59,8 @@ pub struct AnimationsPart {
     pub window_close: Option<WindowCloseAnim>,
     #[knuffel(child)]
     pub horizontal_view_movement: Option<HorizontalViewMovementAnim>,
+    #[knuffel(child)]
+    pub plane_pan_release: Option<PlanePanReleaseAnim>,
     #[knuffel(child)]
     pub window_movement: Option<WindowMovementAnim>,
     #[knuffel(child)]
@@ -90,6 +94,7 @@ impl MergeWith<AnimationsPart> for Animations {
             window_open,
             window_close,
             horizontal_view_movement,
+            plane_pan_release,
             window_movement,
             window_resize,
             config_notification_open_close,
@@ -197,6 +202,22 @@ impl Default for WindowCloseAnim {
 pub struct HorizontalViewMovementAnim(pub Animation);
 
 impl Default for HorizontalViewMovementAnim {
+    fn default() -> Self {
+        Self(Animation {
+            off: false,
+            kind: Kind::Spring(SpringParams {
+                damping_ratio: 1.,
+                stiffness: 800,
+                epsilon: 0.0001,
+            }),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlanePanReleaseAnim(pub Animation);
+
+impl Default for PlanePanReleaseAnim {
     fn default() -> Self {
         Self(Animation {
             off: false,
@@ -342,6 +363,21 @@ where
 }
 
 impl<S> knuffel::Decode<S> for HorizontalViewMovementAnim
+where
+    S: knuffel::traits::ErrorSpan,
+{
+    fn decode_node(
+        node: &knuffel::ast::SpannedNode<S>,
+        ctx: &mut knuffel::decode::Context<S>,
+    ) -> Result<Self, DecodeError<S>> {
+        let default = Self::default().0;
+        Ok(Self(Animation::decode_node(node, ctx, default, |_, _| {
+            Ok(false)
+        })?))
+    }
+}
+
+impl<S> knuffel::Decode<S> for PlanePanReleaseAnim
 where
     S: knuffel::traits::ErrorSpan,
 {

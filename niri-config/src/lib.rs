@@ -456,6 +456,19 @@ where
         }
 
         if recursion == 0 {
+            let plane_pan_zoom = config.borrow().layout.plane_pan_zoom;
+            if !(0. < plane_pan_zoom && plane_pan_zoom <= 1.) {
+                let node = nodes
+                    .iter()
+                    .find(|node| &**node.node_name == "layout")
+                    .or_else(|| nodes.first())
+                    .unwrap();
+                ctx.emit_error(DecodeError::conversion(
+                    node,
+                    "plane-pan-zoom must satisfy 0 < value <= 1",
+                ));
+            }
+
             let overview = config.borrow().overview;
             if !(0. < overview.min_zoom
                 && overview.min_zoom <= overview.zoom
@@ -665,6 +678,54 @@ mod tests {
         let config = Config::parse_mem("").unwrap();
         assert_eq!(config.input.keyboard.repeat_delay, 600);
         assert_eq!(config.input.keyboard.repeat_rate, 25);
+    }
+
+    #[test]
+    fn parse_plane_tuning() {
+        let defaults = Config::parse_mem("").unwrap();
+        assert_eq!(defaults.layout.workspace_row_gap, 0.1);
+        assert_eq!(defaults.layout.plane_pan_zoom, 0.94);
+        assert_eq!(
+            defaults.animations.plane_pan_release,
+            animations::PlanePanReleaseAnim::default()
+        );
+
+        let config = Config::parse_mem(
+            "layout { workspace-row-gap 0.25; plane-pan-zoom 0.9; }; animations { plane-pan-release { curve \"ease-out-cubic\"; duration-ms 123; }; }",
+        )
+        .unwrap();
+        assert_eq!(config.layout.workspace_row_gap, 0.25);
+        assert_eq!(config.layout.plane_pan_zoom, 0.9);
+        assert_eq!(
+            config.animations.plane_pan_release.0,
+            Animation {
+                off: false,
+                kind: animations::Kind::Easing(animations::EasingParams {
+                    duration_ms: 123,
+                    curve: animations::Curve::EaseOutCubic,
+                }),
+            }
+        );
+
+        let mut layout = Layout::default();
+        layout.merge_with(&LayoutPart {
+            workspace_row_gap: Some(FloatOrInt(0.3)),
+            plane_pan_zoom: Some(FloatOrInt(0.85)),
+            ..Default::default()
+        });
+        assert_eq!(layout.workspace_row_gap, 0.3);
+        assert_eq!(layout.plane_pan_zoom, 0.85);
+    }
+
+    #[test]
+    fn reject_invalid_plane_pan_zoom() {
+        for text in [
+            "layout { plane-pan-zoom -0.1; }",
+            "layout { plane-pan-zoom 0; }",
+            "layout { plane-pan-zoom 1.1; }",
+        ] {
+            assert!(Config::parse_mem(text).is_err(), "config parsed: {text}");
+        }
     }
 
     #[test]
@@ -1533,6 +1594,8 @@ mod tests {
                 empty_workspace_above_first: false,
                 default_column_display: Tabbed,
                 gaps: 8.0,
+                workspace_row_gap: 0.1,
+                plane_pan_zoom: 0.94,
                 struts: Struts {
                     left: FloatOrInt(
                         1.0,
@@ -1629,6 +1692,18 @@ mod tests {
                             EasingParams {
                                 duration_ms: 100,
                                 curve: EaseOutExpo,
+                            },
+                        ),
+                    },
+                ),
+                plane_pan_release: PlanePanReleaseAnim(
+                    Animation {
+                        off: false,
+                        kind: Spring(
+                            SpringParams {
+                                damping_ratio: 1.0,
+                                stiffness: 800,
+                                epsilon: 0.0001,
                             },
                         ),
                     },

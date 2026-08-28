@@ -115,6 +115,33 @@ layout {
 }
 ```
 
+### `workspace-row-gap`
+
+Sets the vertical distance between adjacent workspace rows in the tiled plane as
+a fraction of the output's logical height. The gap is measured between full
+output-height row boxes before plane scaling: `0.1` means 10% of the output
+height, `0` removes the gap, and `1` leaves one output height between rows. The
+default is `0.1`.
+
+```kdl
+layout {
+    workspace-row-gap 0.1
+}
+```
+
+### `plane-pan-zoom`
+
+Sets the transient scale multiplier used during a three-finger plane pan. It
+multiplies the scale at gesture start around the output center; release restores
+the starting scale. Values must satisfy `0 < value <= 1`. The default is `0.94`.
+Gesture recognition and release target selection are not configurable.
+
+```kdl
+layout {
+    plane-pan-zoom 0.94
+}
+```
+
 ### `center-focused-column`
 
 When to center a column when changing focus.
