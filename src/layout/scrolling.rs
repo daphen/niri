@@ -12,6 +12,7 @@ use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size};
 
 use super::closing_window::{ClosingWindow, ClosingWindowRenderElement};
 use super::monitor::InsertPosition;
+use super::plane::{placement, reflow};
 use super::tab_indicator::{TabIndicator, TabIndicatorRenderElement, TabInfo};
 use super::tile::{Tile, TileRenderElement, TileRenderSnapshot};
 use super::workspace::{InteractiveResize, ResolvedSize};
@@ -240,6 +241,8 @@ pub struct Column<W: LayoutElement> {
 
     /// Unique ID of this column.
     id: ColumnId,
+
+    plane_offset: Point<f64, Logical>,
 }
 
 /// Extra per-tile data.
@@ -426,9 +429,13 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             || !self.closing_windows.is_empty()
     }
 
-    pub fn update_render_elements(&mut self, is_active: bool, layer: RenderLayer) {
-        let view_pos = Point::from((self.view_pos(), 0.));
-        let view_size = self.view_size;
+    pub fn update_render_elements(
+        &mut self,
+        is_active: bool,
+        layer: RenderLayer,
+        plane_view: Rectangle<f64, Logical>,
+    ) {
+        let view_size = plane_view.size;
         let active_idx = self.active_column_idx;
         for (col_idx, (col, col_x)) in self.columns_mut().enumerate() {
             // Skip columns belonging to a different render layer.
@@ -437,9 +444,8 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             }
 
             let is_active = is_active && col_idx == active_idx;
-            let col_off = Point::from((col_x, 0.));
-            let col_pos = view_pos - col_off - col.render_offset();
-            let view_rect = Rectangle::new(col_pos, view_size);
+            let position = Point::from((col_x, 0.)) + col.plane_offset + col.render_offset();
+            let view_rect = Rectangle::new(plane_view.loc - position, view_size);
             col.update_render_elements(is_active, view_rect);
         }
     }
@@ -450,6 +456,92 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
     pub fn tiles_mut(&mut self) -> impl Iterator<Item = &mut Tile<W>> + '_ {
         self.columns.iter_mut().flat_map(|col| col.tiles.iter_mut())
+    }
+
+    pub(super) fn plane_items(&self, orders: &[(W::Id, u64)]) -> Vec<placement::Item> {
+        let positions = self.column_xs(self.data.iter().copied());
+        zip(self.columns.iter(), positions)
+            .filter_map(|(column, natural_x)| {
+                let (window, order) = column
+                    .tiles
+                    .iter()
+                    .filter_map(|tile| {
+                        orders
+                            .iter()
+                            .find(|(id, _)| id == tile.window().id())
+                            .map(|(_, order)| (tile.window(), *order))
+                    })
+                    .min_by_key(|(_, order)| *order)?;
+                let height = column
+                    .tiles()
+                    .map(|(tile, offset)| offset.y + tile.tile_size().h)
+                    .fold(0., f64::max);
+                let app_id = window.app_id();
+                Some(placement::Item {
+                    id: column.id,
+                    app_id: app_id.clone(),
+                    order,
+                    size: Size::from((column.width(), height)),
+                    current: Some(Point::from((natural_x, 0.)) + column.plane_offset),
+                })
+            })
+            .collect()
+    }
+
+    pub(super) fn plane_snapshots(&self) -> Vec<reflow::Snapshot<W::Id>> {
+        let positions = self.column_xs(self.data.iter().copied());
+        zip(self.columns.iter(), positions)
+            .flat_map(|(column, natural_x)| {
+                let position = Point::from((natural_x, 0.)) + column.plane_offset;
+                column.tiles().map(move |(tile, offset)| reflow::Snapshot {
+                    id: tile.window().id().clone(),
+                    rectangle: Rectangle::new(position + offset, tile.tile_size()),
+                })
+            })
+            .collect()
+    }
+
+    pub(super) fn set_plane_targets(&mut self, targets: &[placement::Target]) {
+        let positions: Vec<_> = self.column_xs(self.data.iter().copied()).collect();
+        for (column, natural_x) in zip(&mut self.columns, positions) {
+            if let Some(target) = targets.iter().find(|target| target.id == column.id) {
+                column.plane_offset = target.position - Point::from((natural_x, 0.));
+            }
+        }
+    }
+
+    pub(super) fn plane_column_id(&self, window: &W::Id) -> Option<ColumnId> {
+        self.columns
+            .iter()
+            .find(|column| column.tiles.iter().any(|tile| tile.window().id() == window))
+            .map(|column| column.id)
+    }
+
+    pub(super) fn plane_column_position(&self, id: ColumnId) -> Option<Point<f64, Logical>> {
+        let index = self.columns.iter().position(|column| column.id == id)?;
+        Some(Point::from((self.column_x(index), 0.)) + self.columns[index].plane_offset)
+    }
+
+    pub(super) fn set_plane_column_position(
+        &mut self,
+        id: ColumnId,
+        position: Point<f64, Logical>,
+    ) {
+        if let Some(index) = self.columns.iter().position(|column| column.id == id) {
+            let natural = Point::from((self.column_x(index), 0.));
+            self.columns[index].plane_offset = position - natural;
+        }
+    }
+
+    pub(super) fn apply_plane_reflow(&mut self, instructions: &[reflow::Instruction<W::Id>]) {
+        for tile in self.tiles_mut() {
+            if let Some(instruction) = instructions
+                .iter()
+                .find(|instruction| &instruction.id == tile.window().id())
+            {
+                tile.animate_move_from(instruction.offset);
+            }
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -2328,10 +2420,6 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         self.column_x(self.active_column_idx) + self.view_offset.target()
     }
 
-    pub(super) fn content_width(&self) -> f64 {
-        self.column_x(self.columns.len())
-    }
-
     // HACK: pass a self.data iterator in manually as a workaround for the lack of method partial
     // borrowing. Note that this method's return value does not borrow the entire &Self!
     fn column_xs(&self, data: impl Iterator<Item = ColumnData>) -> impl Iterator<Item = f64> {
@@ -2411,11 +2499,10 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         &self,
         view_x: f64,
     ) -> impl Iterator<Item = (&Column<W>, Point<f64, Logical>)> {
-        let view_off = Point::from((-view_x, 0.));
+        let _ = view_x;
         self.columns_in_render_order().map(move |(col, col_x)| {
-            let col_off = Point::from((col_x, 0.));
-            let col_render_off = col.render_offset();
-            let pos = view_off + col_off + col_render_off;
+            let natural = Point::from((col_x, 0.));
+            let pos = natural + col.plane_offset + col.render_offset();
             (col, pos)
         })
     }
@@ -2429,11 +2516,9 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     pub fn columns_with_render_positions_mut(
         &mut self,
     ) -> impl Iterator<Item = (&mut Column<W>, Point<f64, Logical>)> {
-        let view_off = Point::from((-self.view_pos(), 0.));
         self.columns_in_render_order_mut().map(move |(col, col_x)| {
-            let col_off = Point::from((col_x, 0.));
-            let col_render_off = col.render_offset();
-            let pos = view_off + col_off + col_render_off;
+            let natural = Point::from((col_x, 0.));
+            let pos = natural + col.plane_offset + col.render_offset();
             (col, pos)
         })
     }
@@ -4040,6 +4125,7 @@ impl<W: LayoutElement> Column<W> {
             clock: tile.clock.clone(),
             options,
             id: ColumnId::next(),
+            plane_offset: Point::default(),
         };
 
         let pending_sizing_mode = tile.window().pending_sizing_mode();

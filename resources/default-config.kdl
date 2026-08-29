@@ -113,13 +113,12 @@ layout {
     // Set gaps around windows in logical pixels.
     gaps 16
 
-    // Vertical gap between workspace rows as a fraction of output logical height.
-    // For example, 0.1 leaves 10% of the output height between rows.
-    workspace-row-gap 0.1
-
-    // Scale used temporarily while a three-finger plane pan is active.
+    // Scale approached as two-axis travel accumulates during a three-finger plane pan.
     // The value multiplies the scale at gesture start and must be greater than 0 and at most 1.
     plane-pan-zoom 0.94
+
+    // Multiplier for accelerated two-axis plane-pan deltas. Must be greater than 0.
+    plane-pan-sensitivity 1.0
 
     // When to center a column when changing focus, options are:
     // - "never", default behavior, focusing an off-screen column will keep at the left
@@ -310,6 +309,11 @@ animations {
 
     // Slow down all animations by this factor. Values below 1 speed them up instead.
     // slowdown 3.0
+
+    // Camera motion while a three-finger plane pan is active.
+    plane-pan {
+        spring damping-ratio=1.06 stiffness=200 epsilon=0.0001
+    }
 
     // Camera and scale restoration after a three-finger plane pan.
     plane-pan-release {

@@ -19,6 +19,7 @@ enum ActiveGesture {
         x: SwipeTracker,
         y: SwipeTracker,
         start: PlaneView,
+        travel: f64,
     },
     Pinch {
         output: Output,
@@ -30,15 +31,25 @@ enum ActiveGesture {
 
 impl PlaneGesture {
     pub(crate) fn begin<W: LayoutElement>(&mut self, layout: &mut Layout<W>, output: Output) {
-        let Some(start) = layout.plane_pan_begin(&output) else {
-            return;
-        };
+        self.begin_with_delta(layout, output, Point::default(), Duration::ZERO);
+    }
+
+    pub(crate) fn begin_with_delta<W: LayoutElement>(
+        &mut self,
+        layout: &mut Layout<W>,
+        output: Output,
+        initial_delta: Point<f64, Logical>,
+        timestamp: Duration,
+    ) -> Option<Output> {
+        let start = layout.plane_pan_begin(&output)?;
         self.active = Some(ActiveGesture::Pan {
             output,
             x: SwipeTracker::new(),
             y: SwipeTracker::new(),
             start,
+            travel: 0.,
         });
+        self.update(layout, initial_delta, timestamp)
     }
 
     pub(crate) fn update<W: LayoutElement>(
@@ -47,12 +58,21 @@ impl PlaneGesture {
         delta: Point<f64, Logical>,
         timestamp: Duration,
     ) -> Option<Output> {
-        let ActiveGesture::Pan { output, x, y, .. } = self.active.as_mut()? else {
+        let ActiveGesture::Pan {
+            output,
+            x,
+            y,
+            start,
+            travel,
+        } = self.active.as_mut()?
+        else {
             return None;
         };
         x.push(delta.x, timestamp);
         y.push(delta.y, timestamp);
-        layout.plane_pan_update(output, delta)
+        *travel += delta.x.hypot(delta.y);
+        let zoom_progress = (*travel / 240.).clamp(0., 1.);
+        layout.plane_pan_update(output, delta, *start, zoom_progress)
     }
 
     pub(crate) fn end<W: LayoutElement>(
@@ -65,6 +85,7 @@ impl PlaneGesture {
             mut x,
             mut y,
             start,
+            ..
         } = self.active.take()?
         else {
             return None;

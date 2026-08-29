@@ -399,9 +399,17 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.are_transitions_ongoing() || self.floating.are_transitions_ongoing()
     }
 
-    pub fn update_render_elements(&mut self, is_active: bool, layer: RenderLayer) {
-        self.scrolling
-            .update_render_elements(is_active && !self.floating_is_active.get(), layer);
+    pub fn update_render_elements(
+        &mut self,
+        is_active: bool,
+        layer: RenderLayer,
+        plane_view: Rectangle<f64, Logical>,
+    ) {
+        self.scrolling.update_render_elements(
+            is_active && !self.floating_is_active.get(),
+            layer,
+            plane_view,
+        );
 
         let view_rect = Rectangle::from_size(self.view_size);
         self.floating.update_render_elements(
@@ -1642,10 +1650,6 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
-    pub(super) fn tiled_active_window_visual_rectangle(&self) -> Option<Rectangle<f64, Logical>> {
-        self.scrolling.active_window_visual_rectangle()
-    }
-
     pub fn popup_target_rect(&self, window: &W::Id) -> Option<Rectangle<f64, Logical>> {
         if self.floating.has_window(window) {
             self.floating.popup_target_rect(window)
@@ -1911,16 +1915,8 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.insert_hint_area(position)
     }
 
-    pub(super) fn tiled_view_x(&self) -> f64 {
-        self.scrolling.target_view_pos()
-    }
-
     pub(super) fn tiled_render_view_x(&self) -> f64 {
-        self.scrolling.view_pos()
-    }
-
-    pub(super) fn tiled_content_width(&self) -> f64 {
-        self.scrolling.content_width()
+        0.
     }
 
     pub fn view_offset_gesture_begin(&mut self, is_touchpad: bool) {

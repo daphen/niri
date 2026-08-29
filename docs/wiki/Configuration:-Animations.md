@@ -283,6 +283,19 @@ animations {
 }
 ```
 
+#### `plane-pan`
+
+Controls the camera follower while a three-finger pan is active. The default is
+the spring below.
+
+```kdl
+animations {
+    plane-pan {
+        spring damping-ratio=1.06 stiffness=200 epsilon=0.0001
+    }
+}
+```
+
 #### `plane-pan-release`
 
 Controls the tiled-plane camera and scale restoration after a three-finger pan.

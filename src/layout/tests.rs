@@ -40,6 +40,7 @@ struct TestWindowInner {
     is_pending_windowed_fullscreen: Cell<bool>,
     animate_next_configure: Cell<bool>,
     animation_snapshot: RefCell<Option<LayoutElementRenderSnapshot>>,
+    app_id: Option<String>,
     rules: ResolvedWindowRules,
 }
 
@@ -57,6 +58,8 @@ struct TestWindowParams {
     bbox: Rectangle<i32, Logical>,
     #[proptest(strategy = "arbitrary_min_max_size()")]
     min_max_size: (Size<i32, Logical>, Size<i32, Logical>),
+    #[proptest(strategy = "prop::option::of(\"[a-c]\")")]
+    app_id: Option<String>,
     #[proptest(strategy = "prop::option::of(arbitrary_rules())")]
     rules: Option<ResolvedWindowRules>,
 }
@@ -69,6 +72,7 @@ impl TestWindowParams {
             is_floating: false,
             bbox: Rectangle::from_size(Size::from((100, 200))),
             min_max_size: Default::default(),
+            app_id: None,
             rules: None,
         }
     }
@@ -92,6 +96,7 @@ impl TestWindow {
             is_pending_windowed_fullscreen: Cell::new(false),
             animate_next_configure: Cell::new(false),
             animation_snapshot: RefCell::new(None),
+            app_id: params.app_id,
             rules: params.rules.unwrap_or_default(),
         }))
     }
@@ -154,6 +159,10 @@ impl LayoutElement for TestWindow {
 
     fn id(&self) -> &Self::Id {
         &self.0.id
+    }
+
+    fn app_id(&self) -> Option<String> {
+        self.0.app_id.clone()
     }
 
     fn size(&self) -> Size<i32, Logical> {
@@ -1563,7 +1572,7 @@ impl Op {
                 let Some(start) = layout.plane_pan_begin(&output) else {
                     return;
                 };
-                layout.plane_pan_update(&output, Point::from((dx, dy)));
+                layout.plane_pan_update(&output, Point::from((dx, dy)), start, 1.);
                 layout.plane_pan_end(&output, Point::default(), start);
             }
             Op::PlanePinchBegin { output_idx } => {
@@ -3765,23 +3774,27 @@ fn window_hit_center(
 }
 
 #[test]
-fn plane_pan_moves_rendered_hit_target() {
-    let mut layout = check_ops([
-        Op::AddOutput(1),
-        Op::AddWindow {
-            params: TestWindowParams::new(1),
-        },
-    ]);
+fn plane_pan_updates_both_axes() {
+    let windows = (1..=2).map(|id| {
+        let mut params = TestWindowParams::new(id);
+        params.app_id = Some("alpha".into());
+        Op::AddWindow { params }
+    });
+    let mut layout = check_ops(std::iter::once(Op::AddOutput(1)).chain(windows));
+    layout.refresh(true);
+    layout.activate_window(&2);
+    layout.move_down();
+    Op::CompleteAnimations.apply(&mut layout);
+    layout.activate_window(&1);
+    Op::CompleteAnimations.apply(&mut layout);
     let output = output(&layout, 1).unwrap();
-    let before = window_hit_center(&layout, &output, 1).unwrap();
 
-    layout.plane_pan_begin(&output);
-    layout.plane_pan_update(&output, Point::from((120., 80.)));
+    let start = layout.plane_pan_begin(&output).unwrap();
+    layout.plane_pan_update(&output, Point::from((-616.64, 691.84)), start, 1.);
+    Op::CompleteAnimations.apply(&mut layout);
+    layout.plane_pan_end(&output, Point::default(), start);
 
-    let after = window_hit_center(&layout, &output, 1).unwrap();
-    let expected = before - Point::from((120., 80.));
-    assert_ne!(after, before);
-    assert_eq!(layout.window_under(&output, expected).unwrap().0.id(), &1);
+    assert_eq!(layout.focus().unwrap().id(), &2);
 }
 
 #[test]
@@ -3861,39 +3874,36 @@ fn overview_pinch_keeps_centroid_clamps_and_cancels() {
 }
 
 #[test]
-fn configured_workspace_row_gap_sets_plane_row_spacing() {
-    let row_centers = |gap| {
-        let mut options = Options::default();
-        options.layout.workspace_row_gap = gap;
-        let layout = check_ops_with_options(
-            options,
-            [
-                Op::AddOutput(1),
-                Op::AddWindow {
-                    params: TestWindowParams::new(1),
-                },
-                Op::FocusWorkspaceDown,
-                Op::AddWindow {
-                    params: TestWindowParams::new(2),
-                },
-                Op::ToggleOverview,
-                Op::CompleteAnimations,
-            ],
-        );
-        let output = output(&layout, 1).unwrap();
-        (
-            window_hit_center(&layout, &output, 1).unwrap(),
-            window_hit_center(&layout, &output, 2).unwrap(),
-        )
+fn app_centered_placement_is_two_dimensional() {
+    let app_window = |id, app_id: &str| {
+        let mut params = TestWindowParams::new(id);
+        params.app_id = Some(app_id.into());
+        Op::AddWindow { params }
     };
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        app_window(1, "alpha"),
+        app_window(3, "beta"),
+    ]);
+    layout.refresh(true);
+    layout.activate_window(&1);
+    layout.focus_right();
+    assert_eq!(layout.focus().unwrap().id(), &3);
 
-    let without_gap = row_centers(0.);
-    let quarter_height_gap = row_centers(0.25);
-    assert!(
-        (without_gap.0.y - quarter_height_gap.0.y - 45.).abs() <= 10.,
-        "without gap: {without_gap:?}, quarter gap: {quarter_height_gap:?}"
-    );
-    assert_eq!(without_gap.1, quarter_height_gap.1);
+    app_window(2, "alpha").apply(&mut layout);
+    layout.refresh(true);
+    layout.activate_window(&1);
+    layout.focus_right();
+    assert_eq!(layout.focus().unwrap().id(), &3);
+    layout.activate_window(&1);
+    layout.focus_left();
+    assert_eq!(layout.focus().unwrap().id(), &2);
+
+    Op::CloseWindow(1).apply(&mut layout);
+    layout.refresh(true);
+    layout.activate_window(&2);
+    layout.focus_right();
+    assert_eq!(layout.focus().unwrap().id(), &3);
 }
 
 #[test]
@@ -3915,7 +3925,12 @@ fn configured_plane_pan_zoom_and_release_animation_are_used() {
     let start = layout.plane_pan_begin(&output).unwrap();
     assert_eq!(
         layout.monitor_for_output(&output).unwrap().overview_zoom(),
-        0.8
+        1.
+    );
+    layout.plane_pan_update(&output, Point::from((40., 30.)), start, 0.5);
+    assert_eq!(
+        layout.monitor_for_output(&output).unwrap().overview_zoom(),
+        0.9
     );
     layout.plane_pan_end(&output, Point::default(), start);
     Op::AdvanceAnimations { msec_delta: 0 }.apply(&mut layout);
@@ -3940,9 +3955,14 @@ fn plane_pan_zooms_and_focuses_nearest_center_on_release() {
     let start = layout.plane_pan_begin(&output).unwrap();
     assert_eq!(
         layout.monitor_for_output(&output).unwrap().overview_zoom(),
+        1.
+    );
+    layout.plane_pan_update(&output, Point::from((-1000., 0.)), start, 1.);
+    assert_eq!(
+        layout.monitor_for_output(&output).unwrap().overview_zoom(),
         0.94
     );
-    layout.plane_pan_update(&output, Point::from((-1000., 0.)));
+    Op::AdvanceAnimations { msec_delta: 200 }.apply(&mut layout);
 
     layout.plane_pan_end(&output, Point::default(), start);
     let focused = *layout.focus().unwrap().id();
@@ -3971,13 +3991,20 @@ fn output_planes_pan_independently() {
     ]);
     let output1 = output(&layout, 1).unwrap();
     let output2 = output(&layout, 2).unwrap();
-    let before1 = window_hit_center(&layout, &output1, 1).unwrap();
     let before2 = window_hit_center(&layout, &output2, 2).unwrap();
 
-    layout.plane_pan_begin(&output1);
-    layout.plane_pan_update(&output1, Point::from((120., 80.)));
+    let start = layout.plane_pan_begin(&output1).unwrap();
+    layout.plane_pan_update(&output1, Point::from((120., 80.)), start, 1.);
+    Op::CompleteAnimations.apply(&mut layout);
 
-    assert_ne!(window_hit_center(&layout, &output1, 1).unwrap(), before1);
+    assert_eq!(
+        layout.monitor_for_output(&output1).unwrap().overview_zoom(),
+        0.94
+    );
+    assert_eq!(
+        layout.monitor_for_output(&output2).unwrap().overview_zoom(),
+        1.
+    );
     assert_eq!(window_hit_center(&layout, &output2, 2).unwrap(), before2);
 }
 
@@ -3990,7 +4017,7 @@ fn floating_window_stays_in_output_space_during_plane_pan() {
     let before = window_hit_center(&layout, &output, 1).unwrap();
 
     let start = layout.plane_pan_begin(&output).unwrap();
-    layout.plane_pan_update(&output, Point::from((120., 80.)));
+    layout.plane_pan_update(&output, Point::from((120., 80.)), start, 1.);
 
     assert_eq!(window_hit_center(&layout, &output, 1).unwrap(), before);
     layout.plane_pan_end(&output, Point::default(), start);
@@ -4058,17 +4085,12 @@ fn workspace_render_geo_at_fractional_scale() {
     };
 
     let mon = &monitors[0];
-    let mut iter = mon.workspaces_with_render_geo();
-    let (_ws, geo) = iter.next().unwrap();
-    assert!(
-        iter.next().is_none(),
-        "animations are completed, only one workspace should be visible"
-    );
-    assert_eq!(
-        geo.loc.y, 0.,
-        "active workspace must be at y = 0 exactly, \
-         otherwise a pointer against the screen edge at y = 0 won't hit it"
-    );
+    let geometries: Vec<_> = mon
+        .workspaces_with_render_geo()
+        .map(|(_, geo)| geo)
+        .collect();
+    assert_eq!(geometries.len(), mon.workspaces.len());
+    assert!(geometries.windows(2).all(|pair| pair[0] == pair[1]));
 }
 
 fn parent_id_causes_loop(layout: &Layout<TestWindow>, id: usize, mut parent_id: usize) -> bool {

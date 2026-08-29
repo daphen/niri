@@ -4009,6 +4009,8 @@ impl State {
     {
         let mut delta_x = event.delta_x();
         let mut delta_y = event.delta_y();
+        let mut plane_delta_x = delta_x;
+        let mut plane_delta_y = delta_y;
 
         if let Some(libinput_event) =
             (&event as &dyn Any).downcast_ref::<input::event::gesture::GestureSwipeUpdateEvent>()
@@ -4023,13 +4025,16 @@ impl State {
         if let Some(device) = (&device as &dyn Any).downcast_ref::<input::Device>() {
             if device.config_scroll_natural_scroll_enabled() {
                 delta_x = -delta_x;
-                delta_y = -delta_y;
+                plane_delta_x = -plane_delta_x;
+                plane_delta_y = -plane_delta_y;
             }
         }
 
+        let timestamp = Duration::from_micros(event.time());
+
         if let Some((cx, cy)) = &mut self.niri.gesture_swipe_3f_cumulative {
-            *cx += delta_x;
-            *cy += delta_y;
+            *cx += plane_delta_x;
+            *cy += plane_delta_y;
 
             // Check if the gesture moved far enough to decide. Threshold copied from GNOME Shell.
             let (cx, cy) = (*cx, *cy);
@@ -4037,12 +4042,18 @@ impl State {
                 self.niri.gesture_swipe_3f_cumulative = None;
 
                 if let Some(output) = self.niri.output_under_cursor() {
-                    self.niri.plane_gesture.begin(&mut self.niri.layout, output);
+                    if let Some(output) = self.niri.plane_gesture.begin_with_delta(
+                        &mut self.niri.layout,
+                        output,
+                        Point::from((cx, cy)),
+                        timestamp,
+                    ) {
+                        self.niri.queue_redraw(&output);
+                    }
+                    return;
                 }
             }
         }
-
-        let timestamp = Duration::from_micros(event.time());
 
         if let Some(state) = self.niri.gesture_swipe_4f.take() {
             let next = match state {
@@ -4119,7 +4130,7 @@ impl State {
         let mut handled = false;
         let res = self.niri.plane_gesture.update(
             &mut self.niri.layout,
-            Point::from((delta_x, delta_y)),
+            Point::from((plane_delta_x, plane_delta_y)),
             timestamp,
         );
         if let Some(output) = res {

@@ -1,3 +1,7 @@
+pub(super) mod navigation;
+pub(super) mod placement;
+pub(super) mod reflow;
+
 use niri_config::Animation as AnimationConfig;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
@@ -65,8 +69,12 @@ impl Plane {
     pub(super) fn transform(&self) -> PlaneTransform {
         PlaneTransform {
             position: self.position(),
-            scale: self.scale,
+            scale: self.scale(),
         }
+    }
+
+    pub(super) fn target_position(&self) -> Point<f64, Logical> {
+        self.position
     }
 
     pub(super) fn set_scale_around(
@@ -129,11 +137,11 @@ impl Plane {
     pub(super) fn update_bounds(
         &mut self,
         viewport: Size<f64, Logical>,
-        content: Size<f64, Logical>,
+        content: Rectangle<f64, Logical>,
     ) {
         self.bounds = PlaneBounds {
-            min: Point::from((-viewport.w, -viewport.h)),
-            max: Point::from((content.w, content.h)),
+            min: content.loc - viewport.to_point(),
+            max: content.loc + content.size.to_point(),
         };
         self.position = self.clamp(self.position);
     }
@@ -141,10 +149,6 @@ impl Plane {
     pub(super) fn set_position(&mut self, position: Point<f64, Logical>) {
         self.animation = None;
         self.position = self.clamp(position);
-    }
-
-    pub(super) fn offset(&mut self, delta: Point<f64, Logical>) {
-        self.set_position(self.position() + delta);
     }
 
     pub(super) fn animate_to(
@@ -213,7 +217,17 @@ impl Plane {
     }
 }
 
+impl PlaneView {
+    pub(super) fn scale(self) -> f64 {
+        self.scale
+    }
+}
+
 impl PlaneTransform {
+    pub(super) fn scale(self) -> f64 {
+        self.scale
+    }
+
     pub(super) fn world_to_output(
         self,
         point: Point<f64, Logical>,

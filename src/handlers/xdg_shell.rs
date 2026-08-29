@@ -953,6 +953,8 @@ impl XdgShellHandler for State {
 
     fn app_id_changed(&mut self, toplevel: ToplevelSurface) {
         self.update_window_rules(&toplevel);
+        self.niri.layout.refresh_plane_placement();
+        self.niri.queue_redraw_all();
     }
 
     fn title_changed(&mut self, toplevel: ToplevelSurface) {

@@ -9,10 +9,16 @@ layout {
     default-column-width { proportion 0.4; }
 }
 
-spawn-at-startup "foot" "-a" "niri-fixture" "-T" "Fixture A" "sleep" "infinity"
-spawn-at-startup "foot" "-a" "niri-fixture" "-T" "Fixture B" "sleep" "infinity"
-spawn-at-startup "foot" "-a" "niri-fixture" "-T" "Fixture C" "sleep" "infinity"
-spawn-at-startup "foot" "-a" "niri-fixture" "-T" "Fixture D" "sleep" "infinity"
+spawn-at-startup "foot" "-a" "fixture-alpha" "-T" "Alpha 1" "sleep" "infinity"
+spawn-at-startup "foot" "-a" "fixture-alpha" "-T" "Alpha 2" "sleep" "infinity"
+spawn-at-startup "foot" "-a" "fixture-alpha" "-T" "Alpha 3" "sleep" "infinity"
+spawn-at-startup "foot" "-a" "fixture-beta" "-T" "Beta 1" "sleep" "infinity"
+spawn-at-startup "foot" "-a" "fixture-beta" "-T" "Beta 2" "sleep" "infinity"
+spawn-at-startup "foot" "-a" "fixture-beta" "-T" "Beta 3" "sleep" "infinity"
+spawn-at-startup "foot" "-a" "fixture-gamma" "-T" "Gamma 1" "sleep" "infinity"
+spawn-at-startup "foot" "-a" "fixture-gamma" "-T" "Gamma 2" "sleep" "infinity"
+spawn-at-startup "foot" "-a" "fixture-gamma" "-T" "Gamma 3" "sleep" "infinity"
+spawn-at-startup "sh" "-c" "sleep 1; niri msg action set-column-width '30%'; niri msg action focus-column-left; niri msg action set-column-width '60%'; niri msg action consume-window-into-column"
 
 binds {
     Alt+Return { spawn "foot" "-a" "niri-fixture" "-T" "Fixture" "sleep" "infinity"; }

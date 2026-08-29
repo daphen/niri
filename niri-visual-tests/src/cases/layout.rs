@@ -166,17 +166,25 @@ impl Layout {
 
     pub fn plane_pan_and_pinch(args: Args) -> Self {
         let mut rv = Self::new(args);
-        rv.add_window(TestWindow::freeform(0), Some(PresetSize::Proportion(0.3)));
-        rv.add_window(TestWindow::freeform(1), Some(PresetSize::Proportion(0.3)));
-        rv.layout.move_column_to_workspace_down(true);
-        rv.add_window(TestWindow::freeform(2), Some(PresetSize::Proportion(0.3)));
-        rv.layout.move_column_to_workspace_down(true);
-        rv.add_window(TestWindow::freeform(3), Some(PresetSize::Proportion(0.3)));
+        for id in 0..9 {
+            let app_id = ["browser", "terminal", "editor"][id % 3];
+            rv.add_window(
+                TestWindow::freeform(id).with_app_id(app_id),
+                Some(PresetSize::Proportion([0.25, 0.4, 0.6][id % 3])),
+            );
+        }
+        rv.layout.consume_into_column();
+        rv.layout.refresh(true);
 
         rv.add_step(300, |l| {
             l.plane_pan_start = l.layout.plane_pan_begin(&l.output);
-            l.layout
-                .plane_pan_update(&l.output, Point::<f64, Logical>::from((180., 100.)));
+            let start = l.plane_pan_start.unwrap();
+            l.layout.plane_pan_update(
+                &l.output,
+                Point::<f64, Logical>::from((180., 100.)),
+                start,
+                1.,
+            );
         });
         rv.add_step(550, |l| {
             let start = l.plane_pan_start.take().unwrap();

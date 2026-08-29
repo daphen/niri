@@ -22,8 +22,8 @@ pub struct Layout {
     pub empty_workspace_above_first: bool,
     pub default_column_display: ColumnDisplay,
     pub gaps: f64,
-    pub workspace_row_gap: f64,
     pub plane_pan_zoom: f64,
+    pub plane_pan_sensitivity: f64,
     pub struts: Struts,
     pub background_color: Color,
 }
@@ -47,8 +47,8 @@ impl Default for Layout {
             empty_workspace_above_first: false,
             default_column_display: ColumnDisplay::Normal,
             gaps: 16.,
-            workspace_row_gap: 0.1,
             plane_pan_zoom: 0.94,
+            plane_pan_sensitivity: 1.,
             struts: Struts::default(),
             preset_window_heights: vec![
                 PresetSize::Proportion(1. / 3.),
@@ -72,8 +72,8 @@ impl MergeWith<LayoutPart> for Layout {
             always_center_single_column,
             empty_workspace_above_first,
             gaps,
-            workspace_row_gap,
             plane_pan_zoom,
+            plane_pan_sensitivity,
         );
 
         merge_clone!(
@@ -129,9 +129,9 @@ pub struct LayoutPart {
     #[knuffel(child, unwrap(argument))]
     pub gaps: Option<FloatOrInt<0, 65535>>,
     #[knuffel(child, unwrap(argument))]
-    pub workspace_row_gap: Option<FloatOrInt<0, 65535>>,
-    #[knuffel(child, unwrap(argument))]
     pub plane_pan_zoom: Option<FloatOrInt<0, 1>>,
+    #[knuffel(child, unwrap(argument))]
+    pub plane_pan_sensitivity: Option<FloatOrInt<0, 100>>,
     #[knuffel(child)]
     pub struts: Option<Struts>,
     #[knuffel(child)]

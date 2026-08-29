@@ -137,6 +137,10 @@ pub trait LayoutElement {
     /// Unique ID of this element.
     fn id(&self) -> &Self::Id;
 
+    fn app_id(&self) -> Option<String> {
+        None
+    }
+
     /// Updates the config for the element.
     fn update_config(&mut self, blur_config: niri_config::Blur) {
         let _ = blur_config;
@@ -1811,19 +1815,15 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn move_left(&mut self) {
-        let Some(monitor) = self.active_monitor() else {
-            return;
-        };
-        monitor.active_workspace().move_left();
-        monitor.reveal_active_column();
+        if let Some(monitor) = self.active_monitor() {
+            monitor.move_in_plane(plane::navigation::Direction::Left);
+        }
     }
 
     pub fn move_right(&mut self) {
-        let Some(monitor) = self.active_monitor() else {
-            return;
-        };
-        monitor.active_workspace().move_right();
-        monitor.reveal_active_column();
+        if let Some(monitor) = self.active_monitor() {
+            monitor.move_in_plane(plane::navigation::Direction::Right);
+        }
     }
 
     pub fn move_column_to_first(&mut self) {
@@ -1875,17 +1875,15 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn move_down(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
-            return;
-        };
-        workspace.move_down();
+        if let Some(monitor) = self.active_monitor() {
+            monitor.move_in_plane(plane::navigation::Direction::Down);
+        }
     }
 
     pub fn move_up(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
-            return;
-        };
-        workspace.move_up();
+        if let Some(monitor) = self.active_monitor() {
+            monitor.move_in_plane(plane::navigation::Direction::Up);
+        }
     }
 
     pub fn move_down_or_to_workspace_down(&mut self) {
@@ -1949,19 +1947,15 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn focus_left(&mut self) {
-        let Some(monitor) = self.active_monitor() else {
-            return;
-        };
-        monitor.active_workspace().focus_left();
-        monitor.reveal_active_column();
+        if let Some(monitor) = self.active_monitor() {
+            monitor.focus_in_plane(plane::navigation::Direction::Left);
+        }
     }
 
     pub fn focus_right(&mut self) {
-        let Some(monitor) = self.active_monitor() else {
-            return;
-        };
-        monitor.active_workspace().focus_right();
-        monitor.reveal_active_column();
+        if let Some(monitor) = self.active_monitor() {
+            monitor.focus_in_plane(plane::navigation::Direction::Right);
+        }
     }
 
     pub fn focus_column_first(&mut self) {
@@ -2058,17 +2052,15 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn focus_down(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
-            return;
-        };
-        workspace.focus_down();
+        if let Some(monitor) = self.active_monitor() {
+            monitor.focus_in_plane(plane::navigation::Direction::Down);
+        }
     }
 
     pub fn focus_up(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
-            return;
-        };
-        workspace.focus_up();
+        if let Some(monitor) = self.active_monitor() {
+            monitor.focus_in_plane(plane::navigation::Direction::Up);
+        }
     }
 
     pub fn focus_down_or_left(&mut self) {
@@ -3634,9 +3626,11 @@ impl<W: LayoutElement> Layout<W> {
         &mut self,
         output: &Output,
         delta: Point<f64, Logical>,
+        start: plane::PlaneView,
+        zoom_progress: f64,
     ) -> Option<Output> {
         let monitor = self.monitor_for_output_mut(output)?;
-        monitor.plane_pan_update(delta);
+        monitor.plane_pan_update(delta, start, zoom_progress);
         Some(monitor.output.clone())
     }
 
@@ -4896,6 +4890,15 @@ impl<W: LayoutElement> Layout<W> {
             });
     }
 
+    pub fn refresh_plane_placement(&mut self) {
+        if let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set {
+            for monitor in monitors {
+                monitor.invalidate_plane_placement();
+                monitor.reflow_plane();
+            }
+        }
+    }
+
     pub fn refresh(&mut self, is_active: bool) {
         let _span = tracy_client::span!("Layout::refresh");
 
@@ -4940,6 +4943,8 @@ impl<W: LayoutElement> Layout<W> {
                     let is_active = self.is_active
                         && idx == *active_monitor_idx
                         && !matches!(self.interactive_move, Some(InteractiveMoveState::Moving(_)));
+
+                    mon.reflow_plane();
 
                     if ongoing_scrolling_dnd.is_some() && self.overview_open {
                         // Begin the scroll on new monitors and when opening the overview.
