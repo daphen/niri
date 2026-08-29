@@ -61,7 +61,6 @@ pub mod click_grab;
 pub mod move_grab;
 pub mod pick_color_grab;
 pub mod pick_window_grab;
-pub mod plane_gesture;
 pub mod resize_grab;
 pub mod scroll_swipe_gesture;
 pub mod scroll_tracker;
@@ -2936,7 +2935,10 @@ impl State {
             let is_overview_open = self.niri.layout.is_overview_open();
 
             if is_overview_open && !pointer.is_grabbed() && button == Some(MouseButton::Right) {
-                if let Some((output, _)) = self.niri.workspace_under_cursor(true) {
+                if let Some((output, ws)) = self.niri.workspace_under_cursor(true) {
+                    let ws_id = ws.id();
+                    let ws_idx = self.niri.layout.find_workspace_by_id(ws_id).unwrap().0;
+
                     self.niri.layout.focus_output(&output);
 
                     let location = pointer.current_location();
@@ -2946,9 +2948,9 @@ impl State {
                         location,
                     };
                     self.niri
-                        .plane_gesture
-                        .begin(&mut self.niri.layout, output.clone());
-                    let grab = SpatialMovementGrab::new(start_data, output, true);
+                        .layout
+                        .view_offset_gesture_begin(&output, Some(ws_idx), false);
+                    let grab = SpatialMovementGrab::new(start_data, output, ws_id, true);
                     pointer.set_grab(self, grab, serial, Focus::Clear);
                     self.niri
                         .cursor_manager
@@ -2972,7 +2974,9 @@ impl State {
                     })
                 };
 
-                if let Some((output, _)) = output_ws {
+                if let Some((output, ws)) = output_ws {
+                    let ws_id = ws.id();
+
                     self.niri.layout.focus_output(&output);
 
                     let location = pointer.current_location();
@@ -2981,7 +2985,7 @@ impl State {
                         button: button_code,
                         location,
                     };
-                    let grab = SpatialMovementGrab::new(start_data, output, false);
+                    let grab = SpatialMovementGrab::new(start_data, output, ws_id, false);
                     pointer.set_grab(self, grab, serial, Focus::Clear);
                     self.niri
                         .cursor_manager
@@ -3411,38 +3415,97 @@ impl State {
             let vertical = vertical_amount.unwrap_or(0.);
 
             if should_handle_in_overview && modifiers.is_empty() {
+                let mut redraw = false;
+
                 let action = self
                     .niri
                     .overview_scroll_swipe_gesture
                     .update(horizontal, vertical);
+                let is_vertical = self.niri.overview_scroll_swipe_gesture.is_vertical();
 
-                let output = if action.end() {
-                    self.niri
-                        .plane_gesture
-                        .end(&mut self.niri.layout, timestamp)
+                if action.end() {
+                    if is_vertical {
+                        redraw |= self
+                            .niri
+                            .layout
+                            .workspace_switch_gesture_end(Some(true))
+                            .is_some();
+                    } else {
+                        redraw |= self
+                            .niri
+                            .layout
+                            .view_offset_gesture_end(Some(true))
+                            .is_some();
+                    }
                 } else {
-                    if action.begin() {
-                        if let Some(output) = self.niri.output_under_cursor() {
-                            self.niri.plane_gesture.begin(&mut self.niri.layout, output);
+                    // Maybe begin, then update.
+                    if is_vertical {
+                        if action.begin() {
+                            if let Some(output) = self.niri.output_under_cursor() {
+                                self.niri
+                                    .layout
+                                    .workspace_switch_gesture_begin(&output, true);
+                                redraw = true;
+                            }
+                        }
+
+                        let res = self
+                            .niri
+                            .layout
+                            .workspace_switch_gesture_update(vertical, timestamp, true);
+                        if let Some(Some(_)) = res {
+                            redraw = true;
+                        }
+                    } else {
+                        if action.begin() {
+                            if let Some((output, ws)) = self.niri.workspace_under_cursor(true) {
+                                let ws_id = ws.id();
+                                let ws_idx =
+                                    self.niri.layout.find_workspace_by_id(ws_id).unwrap().0;
+
+                                self.niri.layout.view_offset_gesture_begin(
+                                    &output,
+                                    Some(ws_idx),
+                                    true,
+                                );
+                                redraw = true;
+                            }
+                        }
+
+                        let res = self.niri.layout.view_offset_gesture_update(
+                            Point::from((horizontal, 0.)),
+                            timestamp,
+                            true,
+                        );
+                        if let Some(Some(_)) = res {
+                            redraw = true;
                         }
                     }
-                    self.niri.plane_gesture.update(
-                        &mut self.niri.layout,
-                        Point::from((horizontal, vertical)),
-                        timestamp,
-                    )
-                };
+                }
 
-                if output.is_some() {
+                if redraw {
                     self.niri.queue_redraw_all();
                 }
+
                 return;
-            } else if self.niri.overview_scroll_swipe_gesture.reset() {
-                let output = self
-                    .niri
-                    .plane_gesture
-                    .end(&mut self.niri.layout, timestamp);
-                if output.is_some() {
+            } else {
+                let mut redraw = false;
+                if self.niri.overview_scroll_swipe_gesture.reset() {
+                    if self.niri.overview_scroll_swipe_gesture.is_vertical() {
+                        redraw |= self
+                            .niri
+                            .layout
+                            .workspace_switch_gesture_end(Some(true))
+                            .is_some();
+                    } else {
+                        redraw |= self
+                            .niri
+                            .layout
+                            .view_offset_gesture_end(Some(true))
+                            .is_some();
+                    }
+                }
+                if redraw {
                     self.niri.queue_redraw_all();
                 }
             }
@@ -4009,8 +4072,6 @@ impl State {
     {
         let mut delta_x = event.delta_x();
         let mut delta_y = event.delta_y();
-        let mut plane_delta_x = delta_x;
-        let mut plane_delta_y = delta_y;
 
         if let Some(libinput_event) =
             (&event as &dyn Any).downcast_ref::<input::event::gesture::GestureSwipeUpdateEvent>()
@@ -4025,16 +4086,13 @@ impl State {
         if let Some(device) = (&device as &dyn Any).downcast_ref::<input::Device>() {
             if device.config_scroll_natural_scroll_enabled() {
                 delta_x = -delta_x;
-                plane_delta_x = -plane_delta_x;
-                plane_delta_y = -plane_delta_y;
+                delta_y = -delta_y;
             }
         }
 
-        let timestamp = Duration::from_micros(event.time());
-
         if let Some((cx, cy)) = &mut self.niri.gesture_swipe_3f_cumulative {
-            *cx += plane_delta_x;
-            *cy += plane_delta_y;
+            *cx += delta_x;
+            *cy += delta_y;
 
             // Check if the gesture moved far enough to decide. Threshold copied from GNOME Shell.
             let (cx, cy) = (*cx, *cy);
@@ -4042,18 +4100,19 @@ impl State {
                 self.niri.gesture_swipe_3f_cumulative = None;
 
                 if let Some(output) = self.niri.output_under_cursor() {
-                    if let Some(output) = self.niri.plane_gesture.begin_with_delta(
-                        &mut self.niri.layout,
-                        output,
-                        Point::from((cx, cy)),
-                        timestamp,
-                    ) {
-                        self.niri.queue_redraw(&output);
-                    }
-                    return;
+                    let ws_idx = self
+                        .niri
+                        .layout
+                        .monitor_for_output(&output)
+                        .map(|monitor| monitor.active_workspace_idx());
+                    self.niri
+                        .layout
+                        .view_offset_gesture_begin(&output, ws_idx, true);
                 }
             }
         }
+
+        let timestamp = Duration::from_micros(event.time());
 
         if let Some(state) = self.niri.gesture_swipe_4f.take() {
             let next = match state {
@@ -4128,14 +4187,27 @@ impl State {
         }
 
         let mut handled = false;
-        let res = self.niri.plane_gesture.update(
-            &mut self.niri.layout,
-            Point::from((plane_delta_x, plane_delta_y)),
+        let res = self
+            .niri
+            .layout
+            .workspace_switch_gesture_update(delta_y, timestamp, true);
+        if let Some(output) = res {
+            if let Some(output) = output {
+                self.niri.queue_redraw(&output);
+            }
+            handled = true;
+        }
+
+        let res = self.niri.layout.view_offset_gesture_update(
+            Point::from((delta_x, delta_y)),
             timestamp,
+            true,
         );
         if let Some(output) = res {
-            self.niri.queue_redraw(&output);
-            return;
+            if let Some(output) = output {
+                self.niri.queue_redraw(&output);
+            }
+            handled = true;
         }
 
         let res = self
@@ -4205,13 +4277,16 @@ impl State {
         }
 
         let mut handled = false;
-        let res = self
-            .niri
-            .plane_gesture
-            .end(&mut self.niri.layout, Duration::from_micros(event.time()));
+        let res = self.niri.layout.workspace_switch_gesture_end(Some(true));
         if let Some(output) = res {
             self.niri.queue_redraw(&output);
-            return;
+            handled = true;
+        }
+
+        let res = self.niri.layout.view_offset_gesture_end(Some(true));
+        if let Some(output) = res {
+            self.niri.queue_redraw(&output);
+            handled = true;
         }
 
         let res = self.niri.layout.overview_gesture_end();
@@ -4243,24 +4318,9 @@ impl State {
     }
 
     fn on_gesture_pinch_begin<I: InputBackend>(&mut self, event: I::GesturePinchBeginEvent) {
+        let serial = SERIAL_COUNTER.next_serial();
         let pointer = self.niri.seat.get_pointer().unwrap();
 
-        if self.niri.layout.is_overview_open() {
-            if let Some(output) = self.niri.output_under_cursor() {
-                let output_geo = self.niri.global_space.output_geometry(&output).unwrap();
-                let centroid = pointer.current_location() - output_geo.loc.to_f64();
-                if self.niri.plane_gesture.pinch_begin(
-                    &mut self.niri.layout,
-                    output.clone(),
-                    centroid,
-                ) {
-                    self.niri.queue_redraw(&output);
-                    return;
-                }
-            }
-        }
-
-        let serial = SERIAL_COUNTER.next_serial();
         if self.update_pointer_contents() {
             pointer.frame(self);
         }
@@ -4276,16 +4336,8 @@ impl State {
     }
 
     fn on_gesture_pinch_update<I: InputBackend>(&mut self, event: I::GesturePinchUpdateEvent) {
-        if let Some(output) = self.niri.plane_gesture.pinch_update(
-            &mut self.niri.layout,
-            event.delta(),
-            event.scale(),
-        ) {
-            self.niri.queue_redraw(&output);
-            return;
-        }
-
         let pointer = self.niri.seat.get_pointer().unwrap();
+
         if self.update_pointer_contents() {
             pointer.frame(self);
         }
@@ -4302,17 +4354,9 @@ impl State {
     }
 
     fn on_gesture_pinch_end<I: InputBackend>(&mut self, event: I::GesturePinchEndEvent) {
-        if let Some(output) = self
-            .niri
-            .plane_gesture
-            .pinch_end(&mut self.niri.layout, event.cancelled())
-        {
-            self.niri.queue_redraw(&output);
-            return;
-        }
-
         let serial = SERIAL_COUNTER.next_serial();
         let pointer = self.niri.seat.get_pointer().unwrap();
+
         if self.update_pointer_contents() {
             pointer.frame(self);
         }

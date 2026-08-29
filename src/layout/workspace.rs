@@ -206,29 +206,6 @@ impl FloatingActive {
     }
 }
 
-fn resize_edges_for_tile<W: LayoutElement>(
-    tile: &Tile<W>,
-    tile_pos: Point<f64, Logical>,
-    pos: Point<f64, Logical>,
-) -> Option<ResizeEdge> {
-    let pos_within_tile = pos - tile_pos;
-    tile.hit(pos_within_tile)?;
-
-    let size = tile.tile_size().to_f64();
-    let mut edges = ResizeEdge::empty();
-    if pos_within_tile.x < size.w / 3. {
-        edges |= ResizeEdge::LEFT;
-    } else if 2. * size.w / 3. < pos_within_tile.x {
-        edges |= ResizeEdge::RIGHT;
-    }
-    if pos_within_tile.y < size.h / 3. {
-        edges |= ResizeEdge::TOP;
-    } else if 2. * size.h / 3. < pos_within_tile.y {
-        edges |= ResizeEdge::BOTTOM;
-    }
-    Some(edges)
-}
-
 impl<W: LayoutElement> Workspace<W> {
     pub fn new(output: Output, clock: Clock, options: Rc<Options>) -> Self {
         Self::new_with_config(output, None, clock, options)
@@ -399,17 +376,9 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.are_transitions_ongoing() || self.floating.are_transitions_ongoing()
     }
 
-    pub fn update_render_elements(
-        &mut self,
-        is_active: bool,
-        layer: RenderLayer,
-        plane_view: Rectangle<f64, Logical>,
-    ) {
-        self.scrolling.update_render_elements(
-            is_active && !self.floating_is_active.get(),
-            layer,
-            plane_view,
-        );
+    pub fn update_render_elements(&mut self, is_active: bool, layer: RenderLayer) {
+        self.scrolling
+            .update_render_elements(is_active && !self.floating_is_active.get(), layer);
 
         let view_rect = Rectangle::from_size(self.view_size);
         self.floating.update_render_elements(
@@ -1662,20 +1631,15 @@ impl<W: LayoutElement> Workspace<W> {
         &self,
         ctx: RenderCtx<R>,
         xray_pos: XrayPos,
-        plane_view: Rectangle<f64, Logical>,
         focus_ring: bool,
         layer: RenderLayer,
         push: &mut dyn FnMut(WorkspaceRenderElement<R>),
     ) {
         let scrolling_focus_ring = focus_ring && !self.floating_is_active();
-        self.scrolling.render(
-            ctx,
-            xray_pos,
-            plane_view,
-            scrolling_focus_ring,
-            layer,
-            &mut |elem| push(elem.into()),
-        );
+        self.scrolling
+            .render(ctx, xray_pos, scrolling_focus_ring, layer, &mut |elem| {
+                push(elem.into())
+            });
     }
 
     pub fn render_floating<R: NiriRenderer>(
@@ -1797,45 +1761,50 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.start_open_animation(id) || self.floating.start_open_animation(id)
     }
 
-    pub(super) fn floating_window_under(&self, pos: Point<f64, Logical>) -> Option<(&W, HitType)> {
-        if !self.is_floating_visible() {
-            return None;
+    pub fn window_under(&self, pos: Point<f64, Logical>) -> Option<(&W, HitType)> {
+        // This logic is consistent with tiles_with_render_positions().
+        if self.is_floating_visible() {
+            if let Some(rv) = self
+                .floating
+                .tiles_with_render_positions()
+                .find_map(|(tile, tile_pos)| HitType::hit_tile(tile, tile_pos, pos))
+            {
+                return Some(rv);
+            }
         }
 
-        self.floating
-            .tiles_with_render_positions()
-            .find_map(|(tile, tile_pos)| HitType::hit_tile(tile, tile_pos, pos))
+        self.scrolling.window_under(pos)
     }
 
-    pub(super) fn scrolling_window_under(&self, pos: Point<f64, Logical>) -> Option<(&W, HitType)> {
-        self.scrolling
-            .window_under(pos - Point::from((self.scrolling.view_pos(), 0.)))
-    }
-
-    pub(super) fn floating_resize_edges_under(
-        &self,
-        pos: Point<f64, Logical>,
-    ) -> Option<ResizeEdge> {
-        if !self.is_floating_visible() {
-            return None;
-        }
-
-        self.floating
-            .tiles_with_render_positions()
-            .find_map(|(tile, tile_pos)| resize_edges_for_tile(tile, tile_pos, pos))
-    }
-
-    pub(super) fn scrolling_resize_edges_under(
-        &self,
-        pos: Point<f64, Logical>,
-    ) -> Option<ResizeEdge> {
-        let pos = pos - Point::from((self.scrolling.view_pos(), 0.));
-        self.scrolling
-            .tiles_with_render_positions()
+    pub fn resize_edges_under(&self, pos: Point<f64, Logical>) -> Option<ResizeEdge> {
+        self.tiles_with_render_positions()
             .find_map(|(tile, tile_pos, visible)| {
-                visible
-                    .then(|| resize_edges_for_tile(tile, tile_pos, pos))
-                    .flatten()
+                // This logic should be consistent with window_under() in when it returns Some vs.
+                // None.
+                if !visible {
+                    return None;
+                }
+
+                let pos_within_tile = pos - tile_pos;
+
+                if tile.hit(pos_within_tile).is_some() {
+                    let size = tile.tile_size().to_f64();
+
+                    let mut edges = ResizeEdge::empty();
+                    if pos_within_tile.x < size.w / 3. {
+                        edges |= ResizeEdge::LEFT;
+                    } else if 2. * size.w / 3. < pos_within_tile.x {
+                        edges |= ResizeEdge::RIGHT;
+                    }
+                    if pos_within_tile.y < size.h / 3. {
+                        edges |= ResizeEdge::TOP;
+                    } else if 2. * size.h / 3. < pos_within_tile.y {
+                        edges |= ResizeEdge::BOTTOM;
+                    }
+                    return Some(edges);
+                }
+
+                None
             })
     }
 
@@ -1900,23 +1869,11 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.insert_position(pos)
     }
 
-    pub(super) fn scrolling_insert_position_in_plane(
-        &self,
-        pos: Point<f64, Logical>,
-    ) -> InsertPosition {
-        self.scrolling
-            .insert_position(pos - Point::from((self.scrolling.view_pos(), 0.)))
-    }
-
     pub(super) fn insert_hint_area(
         &self,
         position: InsertPosition,
     ) -> Option<Rectangle<f64, Logical>> {
         self.scrolling.insert_hint_area(position)
-    }
-
-    pub(super) fn tiled_render_view_x(&self) -> f64 {
-        0.
     }
 
     pub fn view_offset_gesture_begin(&mut self, is_touchpad: bool) {
@@ -1925,12 +1882,12 @@ impl<W: LayoutElement> Workspace<W> {
 
     pub fn view_offset_gesture_update(
         &mut self,
-        delta_x: f64,
+        delta: Point<f64, Logical>,
         timestamp: Duration,
         is_touchpad: bool,
     ) -> Option<bool> {
         self.scrolling
-            .view_offset_gesture_update(delta_x, timestamp, is_touchpad)
+            .view_offset_gesture_update(delta, timestamp, is_touchpad)
     }
 
     pub fn view_offset_gesture_end(&mut self, is_touchpad: Option<bool>) -> bool {

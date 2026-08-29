@@ -42,7 +42,6 @@ use niri_config::{
     Config, CornerRadius, LayoutPart, PresetSize, Workspace as WorkspaceConfig, WorkspaceReference,
 };
 use niri_ipc::{ColumnDisplay, PositionChange, SizeChange, WindowLayout};
-use plane::PlaneView;
 use scrolling::{Column, ColumnWidth};
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::utils::RescaleRenderElement;
@@ -82,7 +81,6 @@ pub mod focus_ring;
 pub mod insert_hint_element;
 pub mod monitor;
 pub mod opening_window;
-pub mod plane;
 pub mod scrolling;
 pub mod shadow;
 pub mod tab_indicator;
@@ -614,7 +612,6 @@ impl<W: LayoutElement> InteractiveMoveState<W> {
 
 impl<W: LayoutElement> InteractiveMoveData<W> {
     fn tile_render_location(&self, zoom: f64) -> Point<f64, Logical> {
-        let zoom = if self.is_floating { 1. } else { zoom };
         let scale = Scale::from(self.output.current_scale().fractional_scale());
         let window_size = self.tile.window_size();
         let pointer_offset_within_window = Point::from((
@@ -1815,37 +1812,36 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn move_left(&mut self) {
-        if let Some(monitor) = self.active_monitor() {
-            monitor.move_in_plane(plane::navigation::Direction::Left);
-        }
+        let Some(workspace) = self.active_workspace_mut() else {
+            return;
+        };
+        workspace.move_left();
     }
 
     pub fn move_right(&mut self) {
-        if let Some(monitor) = self.active_monitor() {
-            monitor.move_in_plane(plane::navigation::Direction::Right);
-        }
+        let Some(workspace) = self.active_workspace_mut() else {
+            return;
+        };
+        workspace.move_right();
     }
 
     pub fn move_column_to_first(&mut self) {
-        let Some(monitor) = self.active_monitor() else {
+        let Some(workspace) = self.active_workspace_mut() else {
             return;
         };
-        monitor.active_workspace().move_column_to_first();
-        monitor.reveal_active_column();
+        workspace.move_column_to_first();
     }
 
     pub fn move_column_to_last(&mut self) {
-        let Some(monitor) = self.active_monitor() else {
+        let Some(workspace) = self.active_workspace_mut() else {
             return;
         };
-        monitor.active_workspace().move_column_to_last();
-        monitor.reveal_active_column();
+        workspace.move_column_to_last();
     }
 
     pub fn move_column_left_or_to_output(&mut self, output: &Output) -> bool {
-        if let Some(monitor) = self.active_monitor() {
-            if monitor.active_workspace().move_left() {
-                monitor.reveal_active_column();
+        if let Some(workspace) = self.active_workspace_mut() {
+            if workspace.move_left() {
                 return false;
             }
         }
@@ -1855,9 +1851,8 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn move_column_right_or_to_output(&mut self, output: &Output) -> bool {
-        if let Some(monitor) = self.active_monitor() {
-            if monitor.active_workspace().move_right() {
-                monitor.reveal_active_column();
+        if let Some(workspace) = self.active_workspace_mut() {
+            if workspace.move_right() {
                 return false;
             }
         }
@@ -1867,23 +1862,24 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn move_column_to_index(&mut self, index: usize) {
-        let Some(monitor) = self.active_monitor() else {
+        let Some(workspace) = self.active_workspace_mut() else {
             return;
         };
-        monitor.active_workspace().move_column_to_index(index);
-        monitor.reveal_active_column();
+        workspace.move_column_to_index(index);
     }
 
     pub fn move_down(&mut self) {
-        if let Some(monitor) = self.active_monitor() {
-            monitor.move_in_plane(plane::navigation::Direction::Down);
-        }
+        let Some(workspace) = self.active_workspace_mut() else {
+            return;
+        };
+        workspace.move_down();
     }
 
     pub fn move_up(&mut self) {
-        if let Some(monitor) = self.active_monitor() {
-            monitor.move_in_plane(plane::navigation::Direction::Up);
-        }
+        let Some(workspace) = self.active_workspace_mut() else {
+            return;
+        };
+        workspace.move_up();
     }
 
     pub fn move_down_or_to_workspace_down(&mut self) {
@@ -1947,61 +1943,57 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn focus_left(&mut self) {
-        if let Some(monitor) = self.active_monitor() {
-            monitor.focus_in_plane(plane::navigation::Direction::Left);
-        }
+        let Some(workspace) = self.active_workspace_mut() else {
+            return;
+        };
+        workspace.focus_left();
     }
 
     pub fn focus_right(&mut self) {
-        if let Some(monitor) = self.active_monitor() {
-            monitor.focus_in_plane(plane::navigation::Direction::Right);
-        }
+        let Some(workspace) = self.active_workspace_mut() else {
+            return;
+        };
+        workspace.focus_right();
     }
 
     pub fn focus_column_first(&mut self) {
-        let Some(monitor) = self.active_monitor() else {
+        let Some(workspace) = self.active_workspace_mut() else {
             return;
         };
-        monitor.active_workspace().focus_column_first();
-        monitor.reveal_active_column();
+        workspace.focus_column_first();
     }
 
     pub fn focus_column_last(&mut self) {
-        let Some(monitor) = self.active_monitor() else {
+        let Some(workspace) = self.active_workspace_mut() else {
             return;
         };
-        monitor.active_workspace().focus_column_last();
-        monitor.reveal_active_column();
+        workspace.focus_column_last();
     }
 
     pub fn focus_column_right_or_first(&mut self) {
-        let Some(monitor) = self.active_monitor() else {
+        let Some(workspace) = self.active_workspace_mut() else {
             return;
         };
-        monitor.active_workspace().focus_column_right_or_first();
-        monitor.reveal_active_column();
+        workspace.focus_column_right_or_first();
     }
 
     pub fn focus_column_left_or_last(&mut self) {
-        let Some(monitor) = self.active_monitor() else {
+        let Some(workspace) = self.active_workspace_mut() else {
             return;
         };
-        monitor.active_workspace().focus_column_left_or_last();
-        monitor.reveal_active_column();
+        workspace.focus_column_left_or_last();
     }
 
     pub fn focus_column(&mut self, index: usize) {
-        let Some(monitor) = self.active_monitor() else {
+        let Some(workspace) = self.active_workspace_mut() else {
             return;
         };
-        monitor.active_workspace().focus_column(index);
-        monitor.reveal_active_column();
+        workspace.focus_column(index);
     }
 
     pub fn focus_window_up_or_output(&mut self, output: &Output) -> bool {
-        if let Some(monitor) = self.active_monitor() {
-            if monitor.active_workspace().focus_up() {
-                monitor.center_active_window_if_always();
+        if let Some(workspace) = self.active_workspace_mut() {
+            if workspace.focus_up() {
                 return false;
             }
         }
@@ -2011,9 +2003,8 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn focus_window_down_or_output(&mut self, output: &Output) -> bool {
-        if let Some(monitor) = self.active_monitor() {
-            if monitor.active_workspace().focus_down() {
-                monitor.center_active_window_if_always();
+        if let Some(workspace) = self.active_workspace_mut() {
+            if workspace.focus_down() {
                 return false;
             }
         }
@@ -2023,9 +2014,8 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn focus_column_left_or_output(&mut self, output: &Output) -> bool {
-        if let Some(monitor) = self.active_monitor() {
-            if monitor.active_workspace().focus_left() {
-                monitor.reveal_active_column();
+        if let Some(workspace) = self.active_workspace_mut() {
+            if workspace.focus_left() {
                 return false;
             }
         }
@@ -2035,9 +2025,8 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn focus_column_right_or_output(&mut self, output: &Output) -> bool {
-        if let Some(monitor) = self.active_monitor() {
-            if monitor.active_workspace().focus_right() {
-                monitor.reveal_active_column();
+        if let Some(workspace) = self.active_workspace_mut() {
+            if workspace.focus_right() {
                 return false;
             }
         }
@@ -2047,55 +2036,52 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn focus_window_in_column(&mut self, index: u8) {
-        let Some(monitor) = self.active_monitor() else {
+        let Some(workspace) = self.active_workspace_mut() else {
             return;
         };
-        monitor.active_workspace().focus_window_in_column(index);
-        monitor.center_active_window_if_always();
+        workspace.focus_window_in_column(index);
     }
 
     pub fn focus_down(&mut self) {
-        if let Some(monitor) = self.active_monitor() {
-            monitor.focus_in_plane(plane::navigation::Direction::Down);
-        }
+        let Some(workspace) = self.active_workspace_mut() else {
+            return;
+        };
+        workspace.focus_down();
     }
 
     pub fn focus_up(&mut self) {
-        if let Some(monitor) = self.active_monitor() {
-            monitor.focus_in_plane(plane::navigation::Direction::Up);
-        }
+        let Some(workspace) = self.active_workspace_mut() else {
+            return;
+        };
+        workspace.focus_up();
     }
 
     pub fn focus_down_or_left(&mut self) {
-        let Some(monitor) = self.active_monitor() else {
+        let Some(workspace) = self.active_workspace_mut() else {
             return;
         };
-        monitor.active_workspace().focus_down_or_left();
-        monitor.center_active_window_if_always();
+        workspace.focus_down_or_left();
     }
 
     pub fn focus_down_or_right(&mut self) {
-        let Some(monitor) = self.active_monitor() else {
+        let Some(workspace) = self.active_workspace_mut() else {
             return;
         };
-        monitor.active_workspace().focus_down_or_right();
-        monitor.center_active_window_if_always();
+        workspace.focus_down_or_right();
     }
 
     pub fn focus_up_or_left(&mut self) {
-        let Some(monitor) = self.active_monitor() else {
+        let Some(workspace) = self.active_workspace_mut() else {
             return;
         };
-        monitor.active_workspace().focus_up_or_left();
-        monitor.center_active_window_if_always();
+        workspace.focus_up_or_left();
     }
 
     pub fn focus_up_or_right(&mut self) {
-        let Some(monitor) = self.active_monitor() else {
+        let Some(workspace) = self.active_workspace_mut() else {
             return;
         };
-        monitor.active_workspace().focus_up_or_right();
-        monitor.center_active_window_if_always();
+        workspace.focus_up_or_right();
     }
 
     pub fn focus_window_or_workspace_down(&mut self) {
@@ -2113,35 +2099,31 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn focus_window_top(&mut self) {
-        let Some(monitor) = self.active_monitor() else {
+        let Some(workspace) = self.active_workspace_mut() else {
             return;
         };
-        monitor.active_workspace().focus_window_top();
-        monitor.center_active_window_if_always();
+        workspace.focus_window_top();
     }
 
     pub fn focus_window_bottom(&mut self) {
-        let Some(monitor) = self.active_monitor() else {
+        let Some(workspace) = self.active_workspace_mut() else {
             return;
         };
-        monitor.active_workspace().focus_window_bottom();
-        monitor.center_active_window_if_always();
+        workspace.focus_window_bottom();
     }
 
     pub fn focus_window_down_or_top(&mut self) {
-        let Some(monitor) = self.active_monitor() else {
+        let Some(workspace) = self.active_workspace_mut() else {
             return;
         };
-        monitor.active_workspace().focus_window_down_or_top();
-        monitor.center_active_window_if_always();
+        workspace.focus_window_down_or_top();
     }
 
     pub fn focus_window_up_or_bottom(&mut self) {
-        let Some(monitor) = self.active_monitor() else {
+        let Some(workspace) = self.active_workspace_mut() else {
             return;
         };
-        monitor.active_workspace().focus_window_up_or_bottom();
-        monitor.center_active_window_if_always();
+        workspace.focus_window_up_or_bottom();
     }
 
     pub fn move_to_workspace_up(&mut self, focus: bool) {
@@ -2664,14 +2646,14 @@ impl<W: LayoutElement> Layout<W> {
                 scrolled |= mon.dnd_scroll_gesture_scroll(pos_within_output, 1. / zoom);
 
                 if is_scrolling {
-                    if let Some((ws, _)) = mon.workspace_under(pos_within_output) {
+                    if let Some((ws, geo)) = mon.workspace_under(pos_within_output) {
                         let idx = mon.idx_of_ws(ws.id()).unwrap();
-                        let pos_within_workspace =
-                            mon.workspace_point_from_output(idx, pos_within_output);
                         let ws = &mut mon.workspaces[idx];
-                        let pos_within_view =
-                            pos_within_workspace - Point::from((ws.tiled_render_view_x(), 0.));
-                        scrolled |= ws.dnd_scroll_gesture_scroll(pos_within_view, 1. / zoom);
+                        // As far as the DnD scroll gesture is concerned, the workspace spans across
+                        // the whole monitor horizontally.
+                        let ws_pos = Point::from((0., geo.loc.y));
+                        scrolled |=
+                            ws.dnd_scroll_gesture_scroll(pos_within_output - ws_pos, 1. / zoom);
                     }
                 }
 
@@ -2901,17 +2883,18 @@ impl<W: LayoutElement> Layout<W> {
         let _span = tracy_client::span!("Layout::update_insert_hint::update");
 
         if let Some(mon) = self.monitor_for_output_mut(&move_.output) {
-            let (insert_ws, _geo) = mon.insert_position(move_.pointer_pos_within_output);
+            let zoom = mon.overview_zoom();
+            let (insert_ws, geo) = mon.insert_position(move_.pointer_pos_within_output);
             match insert_ws {
                 InsertWorkspace::Existing(ws_id) => {
                     let idx = mon.idx_of_ws(ws_id).unwrap();
-                    let pos_within_workspace =
-                        mon.workspace_point_from_output(idx, move_.pointer_pos_within_output);
                     let ws = &mut mon.workspaces[idx];
+                    let pos_within_workspace =
+                        (move_.pointer_pos_within_output - geo.loc).downscale(zoom);
                     let position = if move_.is_floating {
                         InsertPosition::Floating
                     } else {
-                        ws.scrolling_insert_position_in_plane(pos_within_workspace)
+                        ws.scrolling_insert_position(pos_within_workspace)
                     };
 
                     let border_width = move_.tile.effective_border_width().unwrap_or(0.);
@@ -3260,27 +3243,24 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn focus_floating(&mut self) {
-        let Some(monitor) = self.active_monitor() else {
+        let Some(workspace) = self.active_workspace_mut() else {
             return;
         };
-        monitor.active_workspace().focus_floating();
-        monitor.center_active_window_if_always();
+        workspace.focus_floating();
     }
 
     pub fn focus_tiling(&mut self) {
-        let Some(monitor) = self.active_monitor() else {
+        let Some(workspace) = self.active_workspace_mut() else {
             return;
         };
-        monitor.active_workspace().focus_tiling();
-        monitor.center_active_window_if_always();
+        workspace.focus_tiling();
     }
 
     pub fn switch_focus_floating_tiling(&mut self) {
-        let Some(monitor) = self.active_monitor() else {
+        let Some(workspace) = self.active_workspace_mut() else {
             return;
         };
-        monitor.active_workspace().switch_focus_floating_tiling();
-        monitor.center_active_window_if_always();
+        workspace.switch_focus_floating_tiling();
     }
 
     pub fn move_floating_window(
@@ -3315,10 +3295,9 @@ impl<W: LayoutElement> Layout<W> {
             ..
         } = &mut self.monitor_set
         {
-            for (idx, mon) in monitors.iter_mut().enumerate() {
+            for (idx, mon) in monitors.iter().enumerate() {
                 if &mon.output == output {
                     *active_monitor_idx = idx;
-                    mon.center_active_window_if_always();
                     return;
                 }
             }
@@ -3632,64 +3611,62 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
-    pub fn plane_pan_begin(&mut self, output: &Output) -> Option<PlaneView> {
-        let monitor = self.monitor_for_output_mut(output)?;
-        Some(monitor.plane_pan_begin())
-    }
+    pub fn workspace_switch_gesture_begin(&mut self, output: &Output, is_touchpad: bool) {
+        let monitors = match &mut self.monitor_set {
+            MonitorSet::Normal { monitors, .. } => monitors,
+            MonitorSet::NoOutputs { .. } => unreachable!(),
+        };
 
-    pub fn plane_pan_update(
-        &mut self,
-        output: &Output,
-        delta: Point<f64, Logical>,
-        start: plane::PlaneView,
-        zoom_progress: f64,
-    ) -> Option<Output> {
-        let monitor = self.monitor_for_output_mut(output)?;
-        monitor.plane_pan_update(delta, start, zoom_progress);
-        Some(monitor.output.clone())
-    }
+        for monitor in monitors {
+            // Cancel the gesture on other outputs.
+            if &monitor.output != output {
+                monitor.workspace_switch_gesture_end(None);
+                continue;
+            }
 
-    pub fn plane_pan_end(
-        &mut self,
-        output: &Output,
-        projected_delta: Point<f64, Logical>,
-        view: PlaneView,
-    ) -> Option<Output> {
-        let target = self.monitor_for_output(output)?.plane_pan_target();
-        let world_center = target.as_ref().map(|(_, center)| *center);
-        if let Some((window, _)) = target {
-            self.activate_window(&window);
+            monitor.workspace_switch_gesture_begin(is_touchpad);
         }
-        let monitor = self.monitor_for_output_mut(output)?;
-        monitor.plane_pan_settle(world_center, projected_delta, view);
-        Some(monitor.output.clone())
     }
 
-    pub fn plane_pinch_begin(&mut self, output: &Output) -> Option<PlaneView> {
-        let monitor = self.monitor_for_output_mut(output)?;
-        Some(monitor.plane_pinch_begin())
-    }
-
-    pub fn plane_pinch_update(
+    pub fn workspace_switch_gesture_update(
         &mut self,
-        output: &Output,
-        centroid: Point<f64, Logical>,
-        delta: Point<f64, Logical>,
-        scale_delta: f64,
-    ) -> Option<Output> {
-        let monitor = self.monitor_for_output_mut(output)?;
-        monitor.plane_pinch_update(centroid, delta, scale_delta);
-        Some(monitor.output.clone())
+        delta_y: f64,
+        timestamp: Duration,
+        is_touchpad: bool,
+    ) -> Option<Option<Output>> {
+        let monitors = match &mut self.monitor_set {
+            MonitorSet::Normal { monitors, .. } => monitors,
+            MonitorSet::NoOutputs { .. } => return None,
+        };
+
+        for monitor in monitors {
+            if let Some(refresh) =
+                monitor.workspace_switch_gesture_update(delta_y, timestamp, is_touchpad)
+            {
+                if refresh {
+                    return Some(Some(monitor.output.clone()));
+                } else {
+                    return Some(None);
+                }
+            }
+        }
+
+        None
     }
 
-    pub fn plane_pinch_end(
-        &mut self,
-        output: &Output,
-        restore: Option<PlaneView>,
-    ) -> Option<Output> {
-        let monitor = self.monitor_for_output_mut(output)?;
-        monitor.plane_pinch_end(restore);
-        Some(monitor.output.clone())
+    pub fn workspace_switch_gesture_end(&mut self, is_touchpad: Option<bool>) -> Option<Output> {
+        let monitors = match &mut self.monitor_set {
+            MonitorSet::Normal { monitors, .. } => monitors,
+            MonitorSet::NoOutputs { .. } => return None,
+        };
+
+        for monitor in monitors {
+            if monitor.workspace_switch_gesture_end(is_touchpad) {
+                return Some(monitor.output.clone());
+            }
+        }
+
+        None
     }
 
     pub fn view_offset_gesture_begin(
@@ -3705,6 +3682,7 @@ impl<W: LayoutElement> Layout<W> {
 
         for monitor in monitors {
             for (idx, ws) in monitor.workspaces.iter_mut().enumerate() {
+                // Cancel the gesture on other workspaces.
                 if &monitor.output != output
                     || idx != workspace_idx.unwrap_or(monitor.active_workspace_idx)
                 {
@@ -3719,19 +3697,27 @@ impl<W: LayoutElement> Layout<W> {
 
     pub fn view_offset_gesture_update(
         &mut self,
-        delta_x: f64,
+        delta: Point<f64, Logical>,
         timestamp: Duration,
         is_touchpad: bool,
     ) -> Option<Option<Output>> {
         let zoom = self.overview_zoom();
-        let delta_x = delta_x / zoom;
+        let delta = delta.upscale(1. / zoom);
 
-        for monitor in self.monitors_mut() {
+        let monitors = match &mut self.monitor_set {
+            MonitorSet::Normal { monitors, .. } => monitors,
+            MonitorSet::NoOutputs { .. } => return None,
+        };
+
+        for monitor in monitors {
             for ws in &mut monitor.workspaces {
-                if let Some(refresh) =
-                    ws.view_offset_gesture_update(delta_x, timestamp, is_touchpad)
+                if let Some(refresh) = ws.view_offset_gesture_update(delta, timestamp, is_touchpad)
                 {
-                    return Some(refresh.then(|| monitor.output.clone()));
+                    if refresh {
+                        return Some(Some(monitor.output.clone()));
+                    } else {
+                        return Some(None);
+                    }
                 }
             }
         }
@@ -3740,7 +3726,12 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn view_offset_gesture_end(&mut self, is_touchpad: Option<bool>) -> Option<Output> {
-        for monitor in self.monitors_mut() {
+        let monitors = match &mut self.monitor_set {
+            MonitorSet::Normal { monitors, .. } => monitors,
+            MonitorSet::NoOutputs { .. } => return None,
+        };
+
+        for monitor in monitors {
             for ws in &mut monitor.workspaces {
                 if ws.view_offset_gesture_end(is_touchpad) {
                     return Some(monitor.output.clone());
@@ -3853,17 +3844,11 @@ impl<W: LayoutElement> Layout<W> {
             .unwrap();
         let window_offset = tile.window_loc();
 
-        let tile_scale = if is_floating { 1. } else { zoom };
-        let tile_pos = if is_floating {
-            tile_offset
-        } else {
-            let tile_offset = tile_offset + Point::from((ws.tiled_render_view_x(), 0.));
-            ws_geo.loc + tile_offset.upscale(tile_scale)
-        };
+        let tile_pos = ws_geo.loc + tile_offset.upscale(zoom);
 
         let pointer_offset_within_window =
-            start_pos_within_output - tile_pos - window_offset.upscale(tile_scale);
-        let window_size = tile.window_size().upscale(tile_scale);
+            start_pos_within_output - tile_pos - window_offset.upscale(zoom);
+        let window_size = tile.window_size().upscale(zoom);
         let pointer_ratio_within_window = (
             f64::clamp(pointer_offset_within_window.x / window_size.w, 0., 1.),
             f64::clamp(pointer_offset_within_window.y / window_size.h, 0., 1.),
@@ -3915,7 +3900,20 @@ impl<W: LayoutElement> Layout<W> {
                     return false;
                 }
 
-                let overview_zoom = self.overview_zoom();
+                let zoom = self.overview_zoom();
+                let delta = delta.downscale(zoom);
+
+                pointer_delta += delta;
+
+                let (cx, cy) = (pointer_delta.x, pointer_delta.y);
+                let sq_dist = cx * cx + cy * cy;
+
+                let factor = RubberBand {
+                    stiffness: 1.0,
+                    limit: 0.5,
+                }
+                .band(sq_dist / INTERACTIVE_MOVE_START_THRESHOLD);
+
                 let (is_floating, tile, workspace_config) = self
                     .workspaces_mut()
                     .find(|ws| ws.has_window(&window_id))
@@ -3930,17 +3928,6 @@ impl<W: LayoutElement> Layout<W> {
                         )
                     })
                     .unwrap();
-
-                let zoom = if is_floating { 1. } else { overview_zoom };
-                pointer_delta += delta.downscale(zoom);
-
-                let (cx, cy) = (pointer_delta.x, pointer_delta.y);
-                let sq_dist = cx * cx + cy * cy;
-                let factor = RubberBand {
-                    stiffness: 1.0,
-                    limit: 0.5,
-                }
-                .band(sq_dist / INTERACTIVE_MOVE_START_THRESHOLD);
                 tile.interactive_move_offset = pointer_delta.upscale(factor);
 
                 // Put it back to be able to easily return.
@@ -3979,17 +3966,7 @@ impl<W: LayoutElement> Layout<W> {
                             .unwrap();
 
                         let zoom = mon.overview_zoom();
-                        let tile_offset = if is_floating {
-                            tile_offset
-                        } else {
-                            tile_offset + Point::from((ws.tiled_render_view_x(), 0.))
-                        };
-                        let position = if is_floating {
-                            tile_offset
-                        } else {
-                            ws_geo.loc + tile_offset.upscale(zoom)
-                        };
-                        tile_pos = Some((position, if is_floating { 1. } else { zoom }));
+                        tile_pos = Some((ws_geo.loc + tile_offset.upscale(zoom), zoom));
                     }
                 }
 
@@ -4217,12 +4194,10 @@ impl<W: LayoutElement> Layout<W> {
                                 let position = if move_.is_floating {
                                     InsertPosition::Floating
                                 } else {
-                                    let pos_within_workspace = mon.workspace_point_from_output(
-                                        ws_idx,
-                                        move_.pointer_pos_within_output,
-                                    );
+                                    let pos_within_workspace =
+                                        (move_.pointer_pos_within_output - geo.loc).downscale(zoom);
                                     let ws = &mut mon.workspaces[ws_idx];
-                                    ws.scrolling_insert_position_in_plane(pos_within_workspace)
+                                    ws.scrolling_insert_position(pos_within_workspace)
                                 };
 
                                 (position, Some(geo.loc))
@@ -4308,9 +4283,10 @@ impl<W: LayoutElement> Layout<W> {
 
                         match insert_ws {
                             InsertWorkspace::Existing(_) => {
-                                if offset.is_some() {
-                                    let pos = mon.workspaces[ws_idx]
-                                        .floating_logical_to_size_frac(tile_render_loc);
+                                if let Some(offset) = offset {
+                                    let pos = (tile_render_loc - offset).downscale(zoom);
+                                    let pos =
+                                        mon.workspaces[ws_idx].floating_logical_to_size_frac(pos);
                                     tile.floating_pos = Some(pos);
                                 } else {
                                     error!(
@@ -4352,33 +4328,14 @@ impl<W: LayoutElement> Layout<W> {
                 let (tile, tile_offset, ws_geo) = mon
                     .workspaces_with_render_geo_mut(false)
                     .find_map(|(ws, geo)| {
-                        let render_view_x = ws.tiled_render_view_x();
                         ws.tiles_with_render_positions_mut(false)
                             .find(|(tile, _)| tile.window().id() == &win_id)
-                            .map(|(tile, tile_offset)| {
-                                let tile_offset = if matches!(position, InsertPosition::Floating) {
-                                    tile_offset
-                                } else {
-                                    tile_offset + Point::from((render_view_x, 0.))
-                                };
-                                (tile, tile_offset, geo)
-                            })
+                            .map(|(tile, tile_offset)| (tile, tile_offset, geo))
                     })
                     .unwrap();
-                let new_tile_render_loc = if matches!(position, InsertPosition::Floating) {
-                    tile_offset
-                } else {
-                    ws_geo.loc + tile_offset.upscale(zoom)
-                };
+                let new_tile_render_loc = ws_geo.loc + tile_offset.upscale(zoom);
 
-                let tile_scale = if matches!(position, InsertPosition::Floating) {
-                    1.
-                } else {
-                    zoom
-                };
-                tile.animate_move_from(
-                    (tile_render_loc - new_tile_render_loc).downscale(tile_scale),
-                );
+                tile.animate_move_from((tile_render_loc - new_tile_render_loc).downscale(zoom));
 
                 // Interactive move into floating barely animates (it doesn't really move after
                 // being dropped), so setting it as moving between workspaces would just cause it to
@@ -4447,9 +4404,6 @@ impl<W: LayoutElement> Layout<W> {
 
         for mon in self.monitors_mut() {
             mon.dnd_scroll_gesture_end();
-            if mon.workspace_switch.is_none() {
-                mon.clean_up_workspaces();
-            }
         }
 
         for ws in self.workspaces_mut() {
@@ -4905,15 +4859,6 @@ impl<W: LayoutElement> Layout<W> {
             });
     }
 
-    pub fn refresh_plane_placement(&mut self) {
-        if let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set {
-            for monitor in monitors {
-                monitor.invalidate_plane_placement();
-                monitor.reflow_plane();
-            }
-        }
-    }
-
     pub fn refresh(&mut self, is_active: bool) {
         let _span = tracy_client::span!("Layout::refresh");
 
@@ -4959,8 +4904,6 @@ impl<W: LayoutElement> Layout<W> {
                         && idx == *active_monitor_idx
                         && !matches!(self.interactive_move, Some(InteractiveMoveState::Moving(_)));
 
-                    mon.reflow_plane();
-
                     if ongoing_scrolling_dnd.is_some() && self.overview_open {
                         // Begin the scroll on new monitors and when opening the overview.
                         mon.dnd_scroll_gesture_begin();
@@ -4985,9 +4928,6 @@ impl<W: LayoutElement> Layout<W> {
                                 ws.view_offset_gesture_end(None);
                             }
                         }
-                    }
-                    if mon.workspace_switch.is_none() {
-                        mon.clean_up_workspaces();
                     }
                 }
             }
@@ -5081,8 +5021,11 @@ impl<W: LayoutElement> Default for MonitorSet<W> {
 }
 
 fn compute_overview_zoom(options: &Options, overview_progress: Option<f64>) -> f64 {
+    // Clamp to some sane values.
+    let zoom = options.overview.zoom.clamp(0.0001, 0.75);
+
     if let Some(p) = overview_progress {
-        1. - p * (1. - options.overview.zoom)
+        (1. - p * (1. - zoom)).max(0.0001)
     } else {
         1.
     }

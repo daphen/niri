@@ -244,7 +244,7 @@ impl MoveGrab {
             }
             GestureState::ViewOffset => {
                 let res = data.niri.layout.view_offset_gesture_update(
-                    -relative_delta.x,
+                    Point::from((-relative_delta.x, 0.)),
                     timestamp,
                     false,
                 );

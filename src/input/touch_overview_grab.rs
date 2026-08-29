@@ -40,7 +40,8 @@ pub struct TouchOverviewGrab {
 #[derive(Debug, Clone, Copy)]
 enum GestureState {
     Recognizing,
-    Plane,
+    ViewOffset,
+    WorkspaceSwitch,
     InteractiveMove,
 }
 
@@ -76,12 +77,14 @@ impl TouchOverviewGrab {
             return true;
         };
 
+        let layout = &mut data.niri.layout;
+
         // Check if we should become interactive move.
         if matches!(self.gesture, GestureState::Recognizing) {
             if let Some(window) = self.window.as_ref().filter(|win| win.alive()) {
                 let passed = timestamp.saturating_sub(self.start_timestamp);
                 if INTERACTIVE_MOVE_THRESHOLD <= passed
-                    && data.niri.layout.interactive_move_begin(
+                    && layout.interactive_move_begin(
                         window.clone(),
                         &self.output,
                         self.start_pos_within_output,
@@ -104,15 +107,30 @@ impl TouchOverviewGrab {
 
             // Check if the gesture moved far enough to decide. Threshold copied from libadwaita.
             if c.x * c.x + c.y * c.y >= 16. * 16. {
-                data.niri
-                    .plane_gesture
-                    .begin(&mut data.niri.layout, self.output.clone());
-                self.gesture = GestureState::Plane;
+                if let Some(ws_id) = self.workspace_id.filter(|_| c.x.abs() > c.y.abs()) {
+                    if let Some((ws_idx, ws)) = layout.find_workspace_by_id(ws_id) {
+                        if ws.current_output() == Some(&self.output) {
+                            layout.view_offset_gesture_begin(&self.output, Some(ws_idx), false);
+                            self.gesture = GestureState::ViewOffset;
 
-                if !self.start_data.is_touch() {
-                    data.niri
-                        .cursor_manager
-                        .set_cursor_image(CursorImageStatus::Named(CursorIcon::AllScroll));
+                            if !self.start_data.is_touch() {
+                                data.niri.cursor_manager.set_cursor_image(
+                                    CursorImageStatus::Named(CursorIcon::AllScroll),
+                                );
+                            }
+                        }
+                    }
+                }
+
+                if matches!(self.gesture, GestureState::Recognizing) {
+                    layout.workspace_switch_gesture_begin(&self.output, false);
+                    self.gesture = GestureState::WorkspaceSwitch;
+
+                    if !self.start_data.is_touch() {
+                        data.niri
+                            .cursor_manager
+                            .set_cursor_image(CursorImageStatus::Named(CursorIcon::AllScroll));
+                    }
                 }
             }
         }
@@ -127,14 +145,11 @@ impl TouchOverviewGrab {
 
         let ongoing = match self.gesture {
             GestureState::Recognizing => unreachable!(),
-            GestureState::Plane => data
-                .niri
-                .plane_gesture
-                .update(
-                    &mut data.niri.layout,
-                    Point::from((-delta.x, -delta.y)),
-                    timestamp,
-                )
+            GestureState::ViewOffset => layout
+                .view_offset_gesture_update(Point::from((-delta.x, -delta.y)), timestamp, false)
+                .is_some(),
+            GestureState::WorkspaceSwitch => layout
+                .workspace_switch_gesture_update(-delta.y, timestamp, false)
                 .is_some(),
             GestureState::InteractiveMove => {
                 let window = self.window.as_ref().unwrap();
@@ -161,10 +176,11 @@ impl TouchOverviewGrab {
     }
 
     fn on_ungrab(&mut self, state: &mut State) {
+        let layout = &mut state.niri.layout;
         match self.gesture {
             GestureState::Recognizing => {
                 // Tap to activate.
-                state.niri.layout.focus_output(&self.output);
+                layout.focus_output(&self.output);
 
                 // Activate the workspace if necessary.
                 if self.window.is_some() || self.workspace_matched_narrow {
@@ -180,11 +196,8 @@ impl TouchOverviewGrab {
                         }
                     };
 
-                    let ws_idx = if let Some((Some(mon), ws_idx, _)) = state
-                        .niri
-                        .layout
-                        .workspaces()
-                        .find(|(_, _, ws)| ws_matches(ws))
+                    let ws_idx = if let Some((Some(mon), ws_idx, _)) =
+                        layout.workspaces().find(|(_, _, ws)| ws_matches(ws))
                     {
                         // The workspace could've moved to a different output in the meantime.
                         (*mon.output() == self.output).then_some(ws_idx)
@@ -193,25 +206,22 @@ impl TouchOverviewGrab {
                     };
 
                     if let Some(ws_idx) = ws_idx {
-                        state.niri.layout.toggle_overview_to_workspace(ws_idx);
+                        layout.toggle_overview_to_workspace(ws_idx);
                     }
                 }
 
                 if let Some(window) = self.window.as_ref() {
-                    state.niri.layout.activate_window(window);
+                    layout.activate_window(window);
                 }
             }
-            GestureState::Plane => {
-                state
-                    .niri
-                    .plane_gesture
-                    .end(&mut state.niri.layout, state.niri.clock.now_unadjusted());
+            GestureState::ViewOffset => {
+                layout.view_offset_gesture_end(Some(false));
+            }
+            GestureState::WorkspaceSwitch => {
+                layout.workspace_switch_gesture_end(Some(false));
             }
             GestureState::InteractiveMove => {
-                state
-                    .niri
-                    .layout
-                    .interactive_move_end(self.window.as_ref().unwrap());
+                layout.interactive_move_end(self.window.as_ref().unwrap());
             }
         };
 

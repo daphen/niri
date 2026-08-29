@@ -115,7 +115,6 @@ fn build_ui(app: &adw::Application) {
         Layout::open_to_the_left_big,
         "Layout - Open To The Left - Big",
     );
-    s.add(Layout::plane_pan_and_pinch, "Layout - Plane Pan and Pinch");
 
     s.add(GradientAngle::new, "Gradient - Angle");
     s.add(GradientArea::new, "Gradient - Area");

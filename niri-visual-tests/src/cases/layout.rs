@@ -9,7 +9,7 @@ use smithay::backend::renderer::element::RenderElement;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::desktop::layer_map_for_output;
 use smithay::output::{Mode, Output, PhysicalProperties, Subpixel};
-use smithay::utils::{Logical, Physical, Point, Size};
+use smithay::utils::{Physical, Size};
 
 use super::{Args, TestCase};
 use crate::test_window::TestWindow;
@@ -23,7 +23,6 @@ pub struct Layout {
     layout: niri::layout::Layout<TestWindow>,
     start_time: Duration,
     steps: HashMap<Duration, DynStepFn>,
-    plane_pan_start: Option<niri::layout::plane::PlaneView>,
 }
 
 impl Layout {
@@ -84,7 +83,6 @@ impl Layout {
             layout,
             start_time,
             steps: HashMap::new(),
-            plane_pan_start: None,
         }
     }
 
@@ -159,49 +157,6 @@ impl Layout {
             let right_of = l.windows[0].clone();
             l.add_window_right_of(&right_of, win.clone(), Some(PresetSize::Proportion(0.5)));
             l.layout.start_open_animation_for_window(win.id());
-        });
-
-        rv
-    }
-
-    pub fn plane_pan_and_pinch(args: Args) -> Self {
-        let mut rv = Self::new(args);
-        for id in 0..9 {
-            let app_id = ["browser", "terminal", "editor"][id % 3];
-            rv.add_window(
-                TestWindow::freeform(id).with_app_id(app_id),
-                Some(PresetSize::Proportion([0.25, 0.4, 0.6][id % 3])),
-            );
-        }
-        rv.layout.consume_into_column();
-        rv.layout.refresh(true);
-
-        rv.add_step(300, |l| {
-            l.plane_pan_start = l.layout.plane_pan_begin(&l.output);
-            let start = l.plane_pan_start.unwrap();
-            l.layout.plane_pan_update(
-                &l.output,
-                Point::<f64, Logical>::from((180., 100.)),
-                start,
-                1.,
-            );
-        });
-        rv.add_step(550, |l| {
-            let start = l.plane_pan_start.take().unwrap();
-            l.layout.plane_pan_end(&l.output, Point::default(), start);
-        });
-        rv.add_step(900, |l| {
-            l.layout.open_overview();
-        });
-        rv.add_step(1300, |l| {
-            l.layout.advance_animations();
-            l.layout.plane_pinch_begin(&l.output);
-            l.layout.plane_pinch_update(
-                &l.output,
-                Point::from((640., 360.)),
-                Point::from((-60., 40.)),
-                0.5,
-            );
         });
 
         rv

@@ -455,51 +455,6 @@ where
             }
         }
 
-        if recursion == 0 {
-            let plane_pan_zoom = config.borrow().layout.plane_pan_zoom;
-            if !(0. < plane_pan_zoom && plane_pan_zoom <= 1.) {
-                let node = nodes
-                    .iter()
-                    .find(|node| &**node.node_name == "layout")
-                    .or_else(|| nodes.first())
-                    .unwrap();
-                ctx.emit_error(DecodeError::conversion(
-                    node,
-                    "plane-pan-zoom must satisfy 0 < value <= 1",
-                ));
-            }
-
-            let plane_pan_sensitivity = config.borrow().layout.plane_pan_sensitivity;
-            if plane_pan_sensitivity <= 0. {
-                let node = nodes
-                    .iter()
-                    .find(|node| &**node.node_name == "layout")
-                    .or_else(|| nodes.first())
-                    .unwrap();
-                ctx.emit_error(DecodeError::conversion(
-                    node,
-                    "plane-pan-sensitivity must be greater than 0",
-                ));
-            }
-
-            let overview = config.borrow().overview;
-            if !(0. < overview.min_zoom
-                && overview.min_zoom <= overview.zoom
-                && overview.zoom <= overview.max_zoom
-                && overview.max_zoom <= 1.)
-            {
-                let node = nodes
-                    .iter()
-                    .find(|node| &**node.node_name == "overview")
-                    .or_else(|| nodes.first())
-                    .unwrap();
-                ctx.emit_error(DecodeError::conversion(
-                    node,
-                    "overview zoom levels must satisfy 0 < min-zoom <= zoom <= max-zoom <= 1",
-                ));
-            }
-        }
-
         Ok(Self)
     }
 }
@@ -691,108 +646,6 @@ mod tests {
         let config = Config::parse_mem("").unwrap();
         assert_eq!(config.input.keyboard.repeat_delay, 600);
         assert_eq!(config.input.keyboard.repeat_rate, 25);
-    }
-
-    #[test]
-    fn parse_plane_tuning() {
-        let defaults = Config::parse_mem("").unwrap();
-        assert_eq!(defaults.layout.plane_pan_zoom, 0.94);
-        assert_eq!(defaults.layout.plane_pan_sensitivity, 1.);
-        assert_eq!(
-            defaults.animations.plane_pan,
-            animations::PlanePanAnim::default()
-        );
-        assert_eq!(
-            defaults.animations.plane_pan_release,
-            animations::PlanePanReleaseAnim::default()
-        );
-
-        let config = Config::parse_mem(
-            "layout { plane-pan-zoom 0.9; plane-pan-sensitivity 1.5; }; animations { plane-pan { spring damping-ratio=1.1 stiffness=300 epsilon=0.001; }; plane-pan-release { curve \"ease-out-cubic\"; duration-ms 123; }; }",
-        )
-        .unwrap();
-        assert_eq!(config.layout.plane_pan_zoom, 0.9);
-        assert_eq!(config.layout.plane_pan_sensitivity, 1.5);
-        assert_eq!(
-            config.animations.plane_pan,
-            animations::PlanePanAnim(Animation {
-                off: false,
-                kind: animations::Kind::Spring(animations::SpringParams {
-                    damping_ratio: 1.1,
-                    stiffness: 300,
-                    epsilon: 0.001,
-                }),
-            })
-        );
-        assert_eq!(
-            config.animations.plane_pan_release.0,
-            Animation {
-                off: false,
-                kind: animations::Kind::Easing(animations::EasingParams {
-                    duration_ms: 123,
-                    curve: animations::Curve::EaseOutCubic,
-                }),
-            }
-        );
-
-        let mut layout = Layout::default();
-        layout.merge_with(&LayoutPart {
-            plane_pan_zoom: Some(FloatOrInt(0.85)),
-            plane_pan_sensitivity: Some(FloatOrInt(2.)),
-            ..Default::default()
-        });
-        assert_eq!(layout.plane_pan_zoom, 0.85);
-        assert_eq!(layout.plane_pan_sensitivity, 2.);
-    }
-
-    #[test]
-    fn reject_invalid_plane_pan_sensitivity() {
-        for text in [
-            "layout { plane-pan-sensitivity -0.1; }",
-            "layout { plane-pan-sensitivity 0; }",
-            "layout { plane-pan-sensitivity 101; }",
-        ] {
-            assert!(Config::parse_mem(text).is_err(), "config parsed: {text}");
-        }
-    }
-
-    #[test]
-    fn reject_invalid_plane_pan_zoom() {
-        for text in [
-            "layout { plane-pan-zoom -0.1; }",
-            "layout { plane-pan-zoom 0; }",
-            "layout { plane-pan-zoom 1.1; }",
-        ] {
-            assert!(Config::parse_mem(text).is_err(), "config parsed: {text}");
-        }
-    }
-
-    #[test]
-    fn parse_overview_zoom_bounds() {
-        let config =
-            Config::parse_mem("overview { zoom 0.4; min-zoom 0.2; max-zoom 0.8; }").unwrap();
-        assert_eq!(config.overview.zoom, 0.4);
-        assert_eq!(config.overview.min_zoom, 0.2);
-        assert_eq!(config.overview.max_zoom, 0.8);
-
-        let config = Config::parse_mem("overview { min-zoom 0.25; }").unwrap();
-        assert_eq!(config.overview.zoom, 0.5);
-        assert_eq!(config.overview.min_zoom, 0.25);
-        assert_eq!(config.overview.max_zoom, 0.75);
-    }
-
-    #[test]
-    fn reject_invalid_overview_zoom_bounds() {
-        for text in [
-            "overview { min-zoom -0.1; }",
-            "overview { min-zoom 0; }",
-            "overview { zoom 0.05; min-zoom 0.1; }",
-            "overview { zoom 0.8; max-zoom 0.75; }",
-            "overview { min-zoom 0.7; max-zoom 0.6; }",
-            "overview { max-zoom 1.1; }",
-        ] {
-            assert!(Config::parse_mem(text).is_err(), "config parsed: {text}");
-        }
     }
 
     #[track_caller]
@@ -1633,8 +1486,6 @@ mod tests {
                 empty_workspace_above_first: false,
                 default_column_display: Tabbed,
                 gaps: 8.0,
-                plane_pan_zoom: 0.94,
-                plane_pan_sensitivity: 1.0,
                 struts: Struts {
                     left: FloatOrInt(
                         1.0,
@@ -1731,30 +1582,6 @@ mod tests {
                             EasingParams {
                                 duration_ms: 100,
                                 curve: EaseOutExpo,
-                            },
-                        ),
-                    },
-                ),
-                plane_pan: PlanePanAnim(
-                    Animation {
-                        off: false,
-                        kind: Spring(
-                            SpringParams {
-                                damping_ratio: 1.06,
-                                stiffness: 200,
-                                epsilon: 0.0001,
-                            },
-                        ),
-                    },
-                ),
-                plane_pan_release: PlanePanReleaseAnim(
-                    Animation {
-                        off: false,
-                        kind: Spring(
-                            SpringParams {
-                                damping_ratio: 1.0,
-                                stiffness: 800,
-                                epsilon: 0.0001,
                             },
                         ),
                     },
@@ -1872,8 +1699,6 @@ mod tests {
             },
             overview: Overview {
                 zoom: 0.5,
-                min_zoom: 0.1,
-                max_zoom: 0.75,
                 backdrop_color: Color {
                     r: 0.15,
                     g: 0.15,

@@ -1058,9 +1058,9 @@ fn width_resize_and_cancel_of_column_to_the_left() {
     check_ops_on_layout(&mut layout, ops);
 
     // Left window is half-resized at 105 px wide, it's at x=-5 matching the right edge position.
-    assert_snapshot!(format_tiles(&layout), @"
-    105 × 100 at x: 95 y:  0
-    200 × 200 at x:200 y:  0
+    assert_snapshot!(format_tiles(&layout), @r"
+    105 × 100 at x: -5 y:  0
+    200 × 200 at x:100 y:  0
     ");
 
     let ops = [

@@ -10,6 +10,7 @@ use smithay::input::SeatHandler;
 use smithay::output::Output;
 use smithay::utils::{Logical, Point, SERIAL_COUNTER};
 
+use crate::layout::workspace::WorkspaceId;
 use crate::niri::State;
 use crate::utils::get_monotonic_time;
 
@@ -17,6 +18,7 @@ pub struct SpatialMovementGrab {
     start_data: PointerGrabStartData<State>,
     last_location: Point<f64, Logical>,
     output: Output,
+    workspace_id: WorkspaceId,
     gesture: GestureState,
 
     // Accumulated and applied in frame().
@@ -28,18 +30,19 @@ pub struct SpatialMovementGrab {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GestureState {
     Recognizing,
-    Plane,
+    ViewOffset,
 }
 
 impl SpatialMovementGrab {
     pub fn new(
         start_data: PointerGrabStartData<State>,
         output: Output,
+        workspace_id: WorkspaceId,
         is_view_offset: bool,
     ) -> Self {
         let location = start_data.location;
         let gesture = if is_view_offset {
-            GestureState::Plane
+            GestureState::ViewOffset
         } else {
             GestureState::Recognizing
         };
@@ -48,6 +51,7 @@ impl SpatialMovementGrab {
             last_location: location,
             start_data,
             output,
+            workspace_id,
             gesture,
             new_location: location,
             event_timestamp: None,
@@ -56,7 +60,7 @@ impl SpatialMovementGrab {
     }
 
     pub fn view_offset_output(&self) -> Option<&Output> {
-        (self.gesture == GestureState::Plane).then_some(&self.output)
+        (self.gesture == GestureState::ViewOffset).then_some(&self.output)
     }
 
     pub fn workspace_switch_output(&self) -> Option<&Output> {
@@ -74,34 +78,43 @@ impl SpatialMovementGrab {
             .unwrap_or(self.new_location - self.last_location);
         self.last_location = self.new_location;
 
+        let layout = &mut data.niri.layout;
         let res = match self.gesture {
             GestureState::Recognizing => {
                 let c = self.new_location - self.start_data.location;
 
                 // Check if the gesture moved far enough to decide. Threshold copied from GTK 4.
                 if c.x * c.x + c.y * c.y >= 8. * 8. {
-                    self.gesture = GestureState::Plane;
-                    data.niri
-                        .plane_gesture
-                        .begin(&mut data.niri.layout, self.output.clone());
-                    data.niri.plane_gesture.update(
-                        &mut data.niri.layout,
-                        Point::from((-c.x, -c.y)),
-                        timestamp,
-                    )
+                    self.gesture = GestureState::ViewOffset;
+                    if let Some((ws_idx, ws)) = layout.find_workspace_by_id(self.workspace_id) {
+                        if ws.current_output() == Some(&self.output) {
+                            layout.view_offset_gesture_begin(&self.output, Some(ws_idx), false);
+                            layout.view_offset_gesture_update(
+                                Point::from((-c.x, -c.y)),
+                                timestamp,
+                                false,
+                            )
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
                 } else {
-                    Some(self.output.clone())
+                    Some(None)
                 }
             }
-            GestureState::Plane => data.niri.plane_gesture.update(
-                &mut data.niri.layout,
+            GestureState::ViewOffset => layout.view_offset_gesture_update(
                 Point::from((-delta.x, -delta.y)),
                 timestamp,
+                false,
             ),
         };
 
         if let Some(output) = res {
-            data.niri.queue_redraw(&output);
+            if let Some(output) = output {
+                data.niri.queue_redraw(&output);
+            }
             true
         } else {
             false
@@ -109,12 +122,10 @@ impl SpatialMovementGrab {
     }
 
     fn on_ungrab(&mut self, state: &mut State) {
+        let layout = &mut state.niri.layout;
         let res = match self.gesture {
             GestureState::Recognizing => None,
-            GestureState::Plane => state
-                .niri
-                .plane_gesture
-                .end(&mut state.niri.layout, state.niri.clock.now_unadjusted()),
+            GestureState::ViewOffset => layout.view_offset_gesture_end(Some(false)),
         };
 
         if let Some(output) = res {

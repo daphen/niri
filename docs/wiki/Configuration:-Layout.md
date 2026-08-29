@@ -115,29 +115,6 @@ layout {
 }
 ```
 
-### `plane-pan-zoom`
-
-Sets the scale multiplier approached as two-dimensional travel accumulates during
-a three-finger plane pan. Release restores the starting scale. Values must
-satisfy `0 < value <= 1`. The default is `0.94`.
-
-```kdl
-layout {
-    plane-pan-zoom 0.94
-}
-```
-
-### `plane-pan-sensitivity`
-
-Multiplies accelerated three-finger plane-pan deltas equally on both axes. It
-must be greater than zero. The default is `1.0`.
-
-```kdl
-layout {
-    plane-pan-sensitivity 1.0
-}
-```
-
 ### `center-focused-column`
 
 When to center a column when changing focus.

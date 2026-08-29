@@ -34,7 +34,6 @@ pub struct TestWindow {
     id: usize,
     inner: Rc<RefCell<TestWindowInner>>,
     rules: ResolvedWindowRules,
-    app_id: Option<String>,
 }
 
 impl TestWindow {
@@ -57,13 +56,7 @@ impl TestWindow {
                 csd_shadow_buffer: SolidColorBuffer::new((0., 0.), [0., 0., 0., 0.3]),
             })),
             rules: ResolvedWindowRules::default(),
-            app_id: None,
         }
-    }
-
-    pub fn with_app_id(mut self, app_id: &str) -> Self {
-        self.app_id = Some(app_id.to_owned());
-        self
     }
 
     pub fn fixed_size(id: usize) -> Self {
@@ -142,10 +135,6 @@ impl LayoutElement for TestWindow {
 
     fn id(&self) -> &Self::Id {
         &self.id
-    }
-
-    fn app_id(&self) -> Option<String> {
-        self.app_id.clone()
     }
 
     fn size(&self) -> Size<i32, Logical> {

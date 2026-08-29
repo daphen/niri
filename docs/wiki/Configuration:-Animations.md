@@ -34,10 +34,6 @@ animations {
         spring damping-ratio=1.0 stiffness=800 epsilon=0.0001
     }
 
-    plane-pan-release {
-        spring damping-ratio=1.0 stiffness=800 epsilon=0.0001
-    }
-
     window-movement {
         spring damping-ratio=1.0 stiffness=800 epsilon=0.0001
     }
@@ -279,34 +275,6 @@ animations {
                 return color * (1.0 - niri_clamped_progress);
             }
         "
-    }
-}
-```
-
-#### `plane-pan`
-
-Controls the camera follower while a three-finger pan is active. The default is
-the spring below.
-
-```kdl
-animations {
-    plane-pan {
-        spring damping-ratio=1.06 stiffness=200 epsilon=0.0001
-    }
-}
-```
-
-#### `plane-pan-release`
-
-Controls the tiled-plane camera and scale restoration after a three-finger pan.
-It starts after the nearest visible tiled window is focused; when no tiled
-candidate exists, the same animation restores scale and projected momentum
-without changing focus. The default is the spring below.
-
-```kdl
-animations {
-    plane-pan-release {
-        spring damping-ratio=1.0 stiffness=800 epsilon=0.0001
     }
 }
 ```
