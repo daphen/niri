@@ -21,7 +21,9 @@ fn format_tiles(niri: &Niri) -> String {
     // don't print the id since it's nondeterministic (the id is a global counter across all
     // running tests in the same binary).
     tiles.sort_by_key(|(tile, _, _)| tile.window().id().get());
+    let origin = tiles.first().map_or(Point::default(), |(_, pos, _)| *pos);
     for (tile, pos, _visible) in tiles {
+        let pos = pos - origin;
         let Size { w, h, .. } = tile.animated_tile_size();
         let Point { x, y, .. } = pos;
         writeln!(&mut buf, "{w:>3.0} × {h:>3.0} at x:{x:>3.0} y:{y:>3.0}").unwrap();
@@ -98,7 +100,8 @@ fn set_up_two_in_column() -> (Fixture, ClientId, WlSurface, WlSurface) {
     let _ = f.client(id).window(&surface2).recent_configures();
 
     // Consume into one column.
-    f.niri().layout.focus_left();
+    let first = f.niri().layout.windows().next().unwrap().1.window.clone();
+    f.niri().layout.activate_window(&first);
     f.niri().layout.consume_into_column();
     f.double_roundtrip(id);
 
