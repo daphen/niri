@@ -2746,6 +2746,72 @@ fn spatial_move_and_interruption_preserve_rendered_position() {
 }
 
 #[test]
+fn spatial_pointer_hit_activates_off_origin_window_with_xy_camera() {
+    let mut layout = check_ops([Op::AddOutput(1)]);
+    for (id, width, height) in [
+        (1, 900, 600),
+        (2, 700, 500),
+        (3, 1100, 650),
+        (4, 800, 450),
+        (5, 1000, 700),
+    ] {
+        Op::AddWindow {
+            params: TestWindowParams::new(id),
+        }
+        .apply(&mut layout);
+        layout.set_window_width(Some(&id), SizeChange::SetFixed(width));
+        layout.set_window_height(Some(&id), SizeChange::SetFixed(height));
+        Op::Communicate(id).apply(&mut layout);
+        layout.refresh(true);
+    }
+    Op::CompleteAnimations.apply(&mut layout);
+    let output = layout.outputs().next().unwrap().clone();
+    let focused_position = |layout: &Layout<TestWindow>| {
+        let focused = layout.focus().unwrap().id();
+        layout
+            .active_workspace()
+            .unwrap()
+            .scrolling()
+            .tiles_with_render_positions()
+            .find_map(|(tile, position, _)| (tile.window().id() == focused).then_some(position))
+            .unwrap()
+    };
+    let camera_before = focused_position(&layout);
+    layout.view_offset_gesture_begin(&output, None, true);
+    layout.view_offset_gesture_update(Point::from((240., 180.)), Duration::from_millis(16), true);
+    let camera_after = focused_position(&layout);
+    assert_ne!(camera_before.x, camera_after.x);
+    assert_ne!(camera_before.y, camera_after.y);
+
+    let (target, point) = layout
+        .active_workspace()
+        .unwrap()
+        .scrolling()
+        .tiles_with_render_positions()
+        .find_map(|(tile, position, _)| {
+            let rectangle = Rectangle::new(position, tile.tile_size());
+            let visible =
+                rectangle.intersection(Rectangle::from_size(Size::from((1280., 720.))))?;
+            (tile.window().id() != layout.focus().unwrap().id()
+                && (position.x.abs() > 1. || position.y.abs() > 1.))
+                .then(|| (*tile.window().id(), visible.loc + Point::from((10., 10.))))
+        })
+        .unwrap();
+    let workspace_hit = layout
+        .active_workspace()
+        .unwrap()
+        .window_under(point)
+        .map(|(window, _)| *window.id());
+    assert_eq!(workspace_hit, Some(target));
+    let hit = layout
+        .window_under(&output, point)
+        .map(|(window, _)| *window.id());
+    assert_eq!(hit, Some(target));
+    layout.activate_window(&target);
+    assert_eq!(*layout.focus().unwrap().id(), target);
+}
+
+#[test]
 fn touchpad_pan_updates_both_camera_axes() {
     let mut layout = check_ops([
         Op::AddOutput(1),

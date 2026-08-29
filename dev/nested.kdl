@@ -11,48 +11,48 @@ layout {
 
 window-rule {
     match app-id="^fixture-plane$" title="^W1$"
-    default-column-width { fixed 620; }
-    default-window-height { fixed 500; }
+    default-column-width { fixed 1800; }
+    default-window-height { fixed 1400; }
 }
 window-rule {
     match app-id="^fixture-plane$" title="^W2$"
-    default-column-width { fixed 360; }
-    default-window-height { fixed 220; }
+    default-column-width { fixed 1200; }
+    default-window-height { fixed 900; }
 }
 window-rule {
     match app-id="^fixture-plane$" title="^W3$"
-    default-column-width { fixed 420; }
-    default-window-height { fixed 300; }
+    default-column-width { fixed 1600; }
+    default-window-height { fixed 1100; }
 }
 window-rule {
     match app-id="^fixture-plane$" title="^W4$"
-    default-column-width { fixed 280; }
-    default-window-height { fixed 180; }
+    default-column-width { fixed 1000; }
+    default-window-height { fixed 800; }
 }
 window-rule {
     match app-id="^fixture-plane$" title="^W5$"
-    default-column-width { fixed 500; }
-    default-window-height { fixed 260; }
+    default-column-width { fixed 2000; }
+    default-window-height { fixed 1200; }
 }
 window-rule {
     match app-id="^fixture-plane$" title="^W6$"
-    default-column-width { fixed 320; }
-    default-window-height { fixed 420; }
+    default-column-width { fixed 1300; }
+    default-window-height { fixed 1600; }
 }
 window-rule {
     match app-id="^fixture-plane$" title="^W7$"
-    default-column-width { fixed 460; }
-    default-window-height { fixed 200; }
+    default-column-width { fixed 1700; }
+    default-window-height { fixed 950; }
 }
 window-rule {
     match app-id="^fixture-plane$" title="^W8$"
-    default-column-width { fixed 300; }
-    default-window-height { fixed 340; }
+    default-column-width { fixed 1100; }
+    default-window-height { fixed 1500; }
 }
 window-rule {
     match app-id="^fixture-plane$" title="^W9$"
-    default-column-width { fixed 380; }
-    default-window-height { fixed 240; }
+    default-column-width { fixed 1500; }
+    default-window-height { fixed 1050; }
 }
 
 spawn-at-startup "/nix/store/fjks97fnvkfgf0qjpdndbmfz3gk7awya-foot-1.27.0/bin/foot" "-a" "fixture-plane" "-T" "W1" "sleep" "infinity"

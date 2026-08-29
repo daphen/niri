@@ -1710,11 +1710,6 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             return false;
         };
         self.columns[column_idx].activate_idx(tile_idx);
-        self.animate_view_y_to_tile(
-            column_idx,
-            tile_idx,
-            self.options.animations.horizontal_view_movement.0,
-        );
         self.activate_column(column_idx);
         true
     }
@@ -3254,23 +3249,11 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                     return Some((col.tiles[idx].window(), hit));
                 }
             }
-
-            for (tile, tile_off, visible) in col.tiles_in_render_order() {
-                if !visible {
-                    continue;
-                }
-
-                let tile_pos = col_pos + tile_off + tile.render_offset();
-                // Round to physical pixels.
-                let tile_pos = tile_pos.to_physical_precise_round(scale).to_logical(scale);
-
-                if let Some(rv) = HitType::hit_tile(tile, tile_pos, pos) {
-                    return Some(rv);
-                }
-            }
         }
 
-        None
+        self.tiles_with_render_positions()
+            .filter(|(_, _, visible)| *visible)
+            .find_map(|(tile, tile_pos, _)| HitType::hit_tile(tile, tile_pos, pos))
     }
 
     pub fn view_offset_gesture_begin(&mut self, is_touchpad: bool) {
