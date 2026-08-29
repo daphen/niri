@@ -1,0 +1,82 @@
+hotkey-overlay {
+    skip-at-startup
+}
+
+prefer-no-csd
+
+layout {
+    gaps 16
+    center-focused-column "always"
+}
+
+window-rule {
+    match app-id="^fixture-plane$" title="^W1$"
+    default-column-width { fixed 620; }
+    default-window-height { fixed 500; }
+}
+window-rule {
+    match app-id="^fixture-plane$" title="^W2$"
+    default-column-width { fixed 360; }
+    default-window-height { fixed 220; }
+}
+window-rule {
+    match app-id="^fixture-plane$" title="^W3$"
+    default-column-width { fixed 420; }
+    default-window-height { fixed 300; }
+}
+window-rule {
+    match app-id="^fixture-plane$" title="^W4$"
+    default-column-width { fixed 280; }
+    default-window-height { fixed 180; }
+}
+window-rule {
+    match app-id="^fixture-plane$" title="^W5$"
+    default-column-width { fixed 500; }
+    default-window-height { fixed 260; }
+}
+window-rule {
+    match app-id="^fixture-plane$" title="^W6$"
+    default-column-width { fixed 320; }
+    default-window-height { fixed 420; }
+}
+window-rule {
+    match app-id="^fixture-plane$" title="^W7$"
+    default-column-width { fixed 460; }
+    default-window-height { fixed 200; }
+}
+window-rule {
+    match app-id="^fixture-plane$" title="^W8$"
+    default-column-width { fixed 300; }
+    default-window-height { fixed 340; }
+}
+window-rule {
+    match app-id="^fixture-plane$" title="^W9$"
+    default-column-width { fixed 380; }
+    default-window-height { fixed 240; }
+}
+
+spawn-at-startup "/nix/store/fjks97fnvkfgf0qjpdndbmfz3gk7awya-foot-1.27.0/bin/foot" "-a" "fixture-plane" "-T" "W1" "sleep" "infinity"
+spawn-at-startup "/nix/store/fjks97fnvkfgf0qjpdndbmfz3gk7awya-foot-1.27.0/bin/foot" "-a" "fixture-plane" "-T" "W2" "sleep" "infinity"
+spawn-at-startup "/nix/store/fjks97fnvkfgf0qjpdndbmfz3gk7awya-foot-1.27.0/bin/foot" "-a" "fixture-plane" "-T" "W3" "sleep" "infinity"
+spawn-at-startup "/nix/store/fjks97fnvkfgf0qjpdndbmfz3gk7awya-foot-1.27.0/bin/foot" "-a" "fixture-plane" "-T" "W4" "sleep" "infinity"
+spawn-at-startup "/nix/store/fjks97fnvkfgf0qjpdndbmfz3gk7awya-foot-1.27.0/bin/foot" "-a" "fixture-plane" "-T" "W5" "sleep" "infinity"
+spawn-at-startup "/nix/store/fjks97fnvkfgf0qjpdndbmfz3gk7awya-foot-1.27.0/bin/foot" "-a" "fixture-plane" "-T" "W6" "sleep" "infinity"
+spawn-at-startup "/nix/store/fjks97fnvkfgf0qjpdndbmfz3gk7awya-foot-1.27.0/bin/foot" "-a" "fixture-plane" "-T" "W7" "sleep" "infinity"
+spawn-at-startup "/nix/store/fjks97fnvkfgf0qjpdndbmfz3gk7awya-foot-1.27.0/bin/foot" "-a" "fixture-plane" "-T" "W8" "sleep" "infinity"
+spawn-at-startup "/nix/store/fjks97fnvkfgf0qjpdndbmfz3gk7awya-foot-1.27.0/bin/foot" "-a" "fixture-plane" "-T" "W9" "sleep" "infinity"
+
+binds {
+    Super+H { focus-column-left; }
+    Super+J { focus-window-down; }
+    Super+K { focus-window-up; }
+    Super+L { focus-column-right; }
+
+    Super+Shift+H { move-column-left; }
+    Super+Shift+J { move-window-down; }
+    Super+Shift+K { move-window-up; }
+    Super+Shift+L { move-column-right; }
+
+    Super+Q repeat=false { close-window; }
+    Super+Shift+E { quit skip-confirmation=true; }
+    Super+Slash repeat=false { spawn-sh "for session in $(loginctl list-sessions --no-legend | awk '{print $1}'); do if [ \"$(loginctl show-session \"$session\" -p Name --value)\" = \"$USER\" ] && [ \"$(loginctl show-session \"$session\" -p VTNr --value)\" = 1 ]; then exec loginctl activate \"$session\"; fi; done"; }
+}

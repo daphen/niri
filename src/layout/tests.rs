@@ -2592,6 +2592,119 @@ fn spatial_layout_packs_variable_rectangles_and_navigates_both_axes() {
     assert_ne!(*layout.focus().unwrap().id(), origin);
 }
 
+fn spatial_stack_fixture() -> Layout<TestWindow> {
+    let mut layout = check_ops([Op::AddOutput(1)]);
+    for (id, width, height) in [
+        (0, 420, 180),
+        (1, 420, 240),
+        (2, 420, 300),
+        (3, 300, 200),
+        (4, 520, 260),
+    ] {
+        Op::AddWindow {
+            params: TestWindowParams::new(id),
+        }
+        .apply(&mut layout);
+        layout.set_window_width(Some(&id), SizeChange::SetFixed(width));
+        layout.set_window_height(Some(&id), SizeChange::SetFixed(height));
+        Op::Communicate(id).apply(&mut layout);
+        layout.refresh(true);
+    }
+    Op::FocusColumnFirst.apply(&mut layout);
+    Op::ConsumeWindowIntoColumn.apply(&mut layout);
+    Op::ConsumeWindowIntoColumn.apply(&mut layout);
+    Op::FocusWindowDown.apply(&mut layout);
+    Op::CompleteAnimations.apply(&mut layout);
+
+    assert_eq!(*layout.focus().unwrap().id(), 1);
+    layout
+}
+
+fn spatial_stack_move_fixture() -> (
+    Layout<TestWindow>,
+    std::collections::BTreeMap<usize, Rectangle<f64, Logical>>,
+) {
+    let mut layout = spatial_stack_fixture();
+    let before = ipc_rectangles(&layout);
+    layout.move_right();
+    Op::CompleteAnimations.apply(&mut layout);
+    (layout, before)
+}
+
+fn ipc_rectangles(
+    layout: &Layout<TestWindow>,
+) -> std::collections::BTreeMap<usize, Rectangle<f64, Logical>> {
+    let mut rectangles = std::collections::BTreeMap::new();
+    layout.with_windows(|window, _, _, ipc| {
+        rectangles.insert(
+            *window.id(),
+            Rectangle::new(
+                Point::from(ipc.tile_pos_in_workspace_view.unwrap()),
+                Size::from(ipc.tile_size),
+            ),
+        );
+    });
+    rectangles
+}
+
+#[test]
+fn spatial_move_extracts_only_middle_stack_window() {
+    let (layout, _) = spatial_stack_move_fixture();
+    let after = ipc_rectangles(&layout);
+    assert_eq!(*layout.focus().unwrap().id(), 1);
+    assert_eq!(after[&0].loc.x, after[&2].loc.x);
+    assert_ne!(after[&1].loc.x, after[&0].loc.x);
+}
+
+#[test]
+fn spatial_move_pushes_destination_neighbor() {
+    let (layout, before) = spatial_stack_move_fixture();
+    let after = ipc_rectangles(&layout);
+    assert_ne!(
+        after[&3].loc - after[&4].loc,
+        before[&3].loc - before[&4].loc
+    );
+}
+
+#[test]
+fn spatial_move_collapses_source_stack_vacancy() {
+    let (layout, before) = spatial_stack_move_fixture();
+    let after = ipc_rectangles(&layout);
+    assert!(after[&2].loc.y - after[&0].loc.y < before[&2].loc.y - before[&0].loc.y);
+    assert_eq!(after[&0].loc.x, after[&2].loc.x);
+}
+
+#[test]
+fn spatial_move_preserves_mixed_window_sizes() {
+    let (layout, before) = spatial_stack_move_fixture();
+    let after = ipc_rectangles(&layout);
+    for id in 0..5 {
+        assert_eq!(after[&id].size, before[&id].size);
+    }
+}
+
+#[test]
+fn spatial_middle_stack_move_preserves_rendered_position() {
+    let mut layout = spatial_stack_fixture();
+    let rendered = |layout: &Layout<TestWindow>| {
+        layout
+            .active_workspace()
+            .unwrap()
+            .scrolling()
+            .tiles_with_render_positions()
+            .find_map(|(tile, position, _)| (tile.window().id() == &1).then_some(position))
+            .unwrap()
+    };
+    let before = rendered(&layout);
+    layout.move_right();
+    let after = rendered(&layout);
+    let delta = after - before;
+    assert!(
+        delta.x.hypot(delta.y) < 0.01,
+        "middle-stack move jumped from {before:?} to {after:?} by {delta:?}"
+    );
+}
+
 #[test]
 fn spatial_move_and_interruption_preserve_rendered_position() {
     let mut layout = check_ops([

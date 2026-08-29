@@ -1872,9 +1872,14 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         let Some(current) = self.active_window().map(|window| window.id().clone()) else {
             return false;
         };
-        let Some(target) = navigation::nearest(&current, direction, &self.spatial_tiles()) else {
+        let tiles = self.spatial_tiles();
+        let Some(target) = navigation::nearest(&current, direction, &tiles) else {
             return false;
         };
+        let target_position = tiles
+            .iter()
+            .find_map(|(id, rectangle, _)| (id == &target).then_some(rectangle.loc))
+            .unwrap();
         let target_column = self
             .columns
             .iter()
@@ -1888,31 +1893,92 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             };
         }
 
+        let source_column = self.active_column_idx;
+        let source_tile = self.columns[source_column].active_tile_idx;
+        let view_before = self.spatial_view_pos();
+        let source_origin = self.data[source_column].position
+            + self.columns[source_column].render_offset()
+            + self.columns[source_column].tile_offset(source_tile);
         let rendered: Vec<_> = zip(&self.columns, &self.data)
-            .map(|(column, data)| data.position + column.render_offset())
+            .map(|(column, data)| (column.id, data.position + column.render_offset()))
             .collect();
-        let source_position = self.data[self.active_column_idx].position;
-        self.data[self.active_column_idx].position = self.data[target_column].position;
-        self.data[target_column].position = source_position;
+        let inserted_at = if self.columns[source_column].tiles.len() == 1 {
+            let data = self.data[source_column];
+            let column = self.remove_column_by_idx(
+                source_column,
+                Some(self.options.animations.window_movement.0),
+            );
+            let target_column = target_column - usize::from(source_column < target_column);
+            self.add_column(
+                Some(target_column),
+                column,
+                false,
+                Some(self.options.animations.window_movement.0),
+            );
+            self.data[target_column] = data;
+            target_column
+        } else {
+            let removed = self.remove_tile_by_idx(
+                source_column,
+                source_tile,
+                Transaction::new(),
+                Some(self.options.animations.window_movement.0),
+            );
+            self.add_tile(
+                Some(target_column),
+                removed.tile,
+                false,
+                removed.width,
+                removed.is_full_width,
+                Some(self.options.animations.window_movement.0),
+            );
+            target_column
+        };
+        self.data[inserted_at].position = target_position;
+
         self.placement.invalidate();
         self.arrange_spatial(false);
-        for ((column, data), rendered) in zip(zip(&mut self.columns, &self.data), rendered) {
-            let offset = rendered - data.position;
+        for (column, data) in zip(&mut self.columns, &self.data) {
             column.move_x_animation = None;
             column.move_y_animation = None;
-            column.animate_move_from(offset);
+            if let Some((_, previous)) = rendered.iter().find(|(id, _)| id == &column.id) {
+                column.animate_move_from(*previous - data.position);
+            }
         }
-        self.animate_view_offset_to_column_with_config(
-            None,
-            self.active_column_idx,
-            Some(self.active_column_idx),
-            self.options.animations.window_movement.0,
-        );
-        self.animate_view_y_to_tile(
-            self.active_column_idx,
-            self.columns[self.active_column_idx].active_tile_idx,
-            self.options.animations.window_movement.0,
-        );
+        if !rendered
+            .iter()
+            .any(|(id, _)| id == &self.columns[inserted_at].id)
+        {
+            let target = self.data[inserted_at].position + self.columns[inserted_at].tile_offset(0);
+            self.columns[inserted_at].tiles[0].animate_move_from(source_origin - target);
+        }
+
+        self.active_column_idx = inserted_at;
+        self.activate_prev_column_on_removal = None;
+        self.view_offset_to_restore = None;
+        self.interactive_resize = None;
+        let camera_config = self.options.animations.horizontal_view_movement.0;
+        let target_x =
+            self.compute_new_view_offset_for_column(None, inserted_at, Some(inserted_at));
+        let active_tile = self.columns[inserted_at].active_tile_idx;
+        let (_, tile_offset) = self.columns[inserted_at].tiles().nth(active_tile).unwrap();
+        let tile = &self.columns[inserted_at].tiles[active_tile];
+        let target_y = self.data[inserted_at].position.y + tile_offset.y + tile.tile_size().h / 2.
+            - self.view_size.h / 2.;
+        self.view_offset = ViewOffset::Animation(Animation::new(
+            self.clock.clone(),
+            view_before.x - self.data[inserted_at].position.x,
+            target_x,
+            0.,
+            camera_config,
+        ));
+        self.view_y_offset = ViewOffset::Animation(Animation::new(
+            self.clock.clone(),
+            view_before.y,
+            target_y,
+            0.,
+            camera_config,
+        ));
         true
     }
 
