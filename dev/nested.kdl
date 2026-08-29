@@ -64,6 +64,7 @@ spawn-at-startup "/nix/store/fjks97fnvkfgf0qjpdndbmfz3gk7awya-foot-1.27.0/bin/fo
 spawn-at-startup "/nix/store/fjks97fnvkfgf0qjpdndbmfz3gk7awya-foot-1.27.0/bin/foot" "-a" "fixture-plane" "-T" "W7" "sleep" "infinity"
 spawn-at-startup "/nix/store/fjks97fnvkfgf0qjpdndbmfz3gk7awya-foot-1.27.0/bin/foot" "-a" "fixture-plane" "-T" "W8" "sleep" "infinity"
 spawn-at-startup "/nix/store/fjks97fnvkfgf0qjpdndbmfz3gk7awya-foot-1.27.0/bin/foot" "-a" "fixture-plane" "-T" "W9" "sleep" "infinity"
+spawn-at-startup "sh" "dev/seed-fixture.sh"
 
 binds {
     Super+Return { spawn "/nix/store/fjks97fnvkfgf0qjpdndbmfz3gk7awya-foot-1.27.0/bin/foot" "-a" "fixture-plane" "-T" "Spawned" "sleep" "infinity"; }
