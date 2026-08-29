@@ -1711,6 +1711,45 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             .collect()
     }
 
+    fn spatial_components(
+        &self,
+        tiles: &[(W::Id, Rectangle<f64, Logical>, u64)],
+    ) -> Vec<Vec<W::Id>> {
+        let gap = self.options.layout.gaps;
+        let mut remaining: Vec<_> = (0..tiles.len()).collect();
+        let mut components = Vec::new();
+        while let Some(seed) = remaining.pop() {
+            let mut component = vec![seed];
+            let mut next = 0;
+            while next < component.len() {
+                let rectangle = tiles[component[next]].1;
+                let mut idx = 0;
+                while idx < remaining.len() {
+                    let other = tiles[remaining[idx]].1;
+                    let x_gap = (rectangle.loc.x - (other.loc.x + other.size.w))
+                        .max(other.loc.x - (rectangle.loc.x + rectangle.size.w))
+                        .max(0.);
+                    let y_gap = (rectangle.loc.y - (other.loc.y + other.size.h))
+                        .max(other.loc.y - (rectangle.loc.y + rectangle.size.h))
+                        .max(0.);
+                    if x_gap <= gap && y_gap <= gap {
+                        component.push(remaining.swap_remove(idx));
+                    } else {
+                        idx += 1;
+                    }
+                }
+                next += 1;
+            }
+            components.push(
+                component
+                    .into_iter()
+                    .map(|idx| tiles[idx].0.clone())
+                    .collect(),
+            );
+        }
+        components
+    }
+
     fn collision_free_slot(
         &self,
         current: &W::Id,
@@ -1952,7 +1991,22 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             .iter()
             .find_map(|(id, rectangle, _)| (id == &current).then_some(*rectangle))
             .unwrap();
-        let target = navigation::nearest(&current, direction, &tiles).map(|target| {
+        let vertical = matches!(
+            direction,
+            navigation::Direction::Up | navigation::Direction::Down
+        );
+        let components = self.spatial_components(&tiles);
+        let component = components
+            .iter()
+            .find(|component| component.contains(&current))
+            .unwrap();
+        let cluster_tiles = tiles
+            .iter()
+            .filter(|(id, _, _)| component.contains(id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let candidates = if vertical { &cluster_tiles } else { &tiles };
+        let target = navigation::nearest(&current, direction, candidates).map(|target| {
             let position = tiles
                 .iter()
                 .find_map(|(id, rectangle, _)| (id == &target).then_some(rectangle.loc))
@@ -1964,16 +2018,89 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 .unwrap();
             (target, position, column)
         });
-        if target
-            .as_ref()
-            .is_some_and(|(_, _, column)| *column == self.active_column_idx)
-        {
-            return match direction {
-                navigation::Direction::Up => self.columns[self.active_column_idx].move_up(),
-                navigation::Direction::Down => self.columns[self.active_column_idx].move_down(),
-                navigation::Direction::Left | navigation::Direction::Right => false,
+
+        let cluster_left = cluster_tiles
+            .iter()
+            .map(|(_, rectangle, _)| rectangle.loc.x)
+            .min_by(f64::total_cmp)
+            .unwrap();
+        let cluster_right = cluster_tiles
+            .iter()
+            .map(|(_, rectangle, _)| rectangle.loc.x + rectangle.size.w)
+            .max_by(f64::total_cmp)
+            .unwrap();
+        let cluster_center = (cluster_left + cluster_right) / 2.;
+        let source_row = vertical.then(|| {
+            let mut row = cluster_tiles
+                .iter()
+                .filter(|(_, rectangle, _)| rectangle.loc.y == current_rectangle.loc.y)
+                .map(|(id, rectangle, _)| (id.clone(), *rectangle))
+                .collect::<Vec<_>>();
+            row.sort_by(|a, b| a.1.loc.x.total_cmp(&b.1.loc.x));
+            row
+        });
+        let destination_row = vertical.then(|| {
+            let Some((_, position, _)) = &target else {
+                return Vec::new();
             };
-        }
+            let mut row = cluster_tiles
+                .iter()
+                .filter(|(_, rectangle, _)| rectangle.loc.y == position.y)
+                .map(|(id, rectangle, _)| (id.clone(), *rectangle))
+                .collect::<Vec<_>>();
+            row.sort_by(|a, b| a.1.loc.x.total_cmp(&b.1.loc.x));
+            row
+        });
+        let blocker_components = vertical.then(|| {
+            let mut affected = source_row
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|(id, _)| id.clone())
+                .collect::<Vec<_>>();
+            for (id, _) in destination_row.as_ref().unwrap() {
+                if !affected.contains(id) {
+                    affected.push(id.clone());
+                }
+            }
+            for column in &self.columns {
+                if affected.iter().any(|id| column.contains(id)) {
+                    for tile in &column.tiles {
+                        let id = tile.window().id();
+                        if !affected.contains(id) {
+                            affected.push(id.clone());
+                        }
+                    }
+                }
+            }
+            let blocker_tiles = tiles
+                .iter()
+                .filter(|(id, _, _)| !affected.contains(id))
+                .cloned()
+                .collect::<Vec<_>>();
+            let mut blockers = self.spatial_components(&blocker_tiles);
+            blockers.sort_by(|a, b| {
+                let center = |component: &Vec<W::Id>| {
+                    let left = tiles
+                        .iter()
+                        .filter(|(id, _, _)| component.contains(id))
+                        .map(|(_, rectangle, _)| rectangle.loc.x)
+                        .min_by(f64::total_cmp)
+                        .unwrap();
+                    let right = tiles
+                        .iter()
+                        .filter(|(id, _, _)| component.contains(id))
+                        .map(|(_, rectangle, _)| rectangle.loc.x + rectangle.size.w)
+                        .max_by(f64::total_cmp)
+                        .unwrap();
+                    (left + right) / 2.
+                };
+                (center(a) - cluster_center)
+                    .abs()
+                    .total_cmp(&(center(b) - cluster_center).abs())
+            });
+            blockers
+        });
 
         let source_column = self.active_column_idx;
         let source_was_singleton = self.columns[source_column].tiles.len() == 1;
@@ -2045,54 +2172,210 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         let inserted_tile_offset =
             self.columns[inserted_at].tile_offset(self.columns[inserted_at].active_tile_idx);
         self.data[inserted_at].position = target_position - inserted_tile_offset;
-        if source_was_singleton {
-            let collapse = current_rectangle.size.w + self.options.layout.gaps;
-            for (idx, (column, data)) in zip(&self.columns, &mut self.data).enumerate() {
-                if idx == inserted_at {
+        if vertical {
+            let gap = self.options.layout.gaps;
+            let mut source_ids = source_row
+                .as_ref()
+                .unwrap()
+                .iter()
+                .filter(|(id, _)| id != &current)
+                .map(|(id, _)| id.clone())
+                .collect::<Vec<_>>();
+            let destination = destination_row.as_ref().unwrap();
+            let mut destination_ids = destination
+                .iter()
+                .filter(|(id, _)| id != &current)
+                .map(|(id, _)| id.clone())
+                .collect::<Vec<_>>();
+            let current_center = current_rectangle.loc.x + current_rectangle.size.w / 2.;
+            let source_idx = source_row
+                .as_ref()
+                .unwrap()
+                .iter()
+                .position(|(id, _)| id == &current)
+                .unwrap();
+            let source_is_right = current_center > cluster_center
+                || (current_center == cluster_center
+                    && source_idx * 2 >= source_row.as_ref().unwrap().len());
+            let insert_idx = if destination_ids.len() % 2 == 0 {
+                destination_ids.len() / 2
+            } else if source_is_right {
+                destination
+                    .iter()
+                    .filter(|(id, _)| id != &current)
+                    .take_while(|(_, rectangle)| {
+                        rectangle.loc.x + rectangle.size.w / 2. <= current_center
+                    })
+                    .count()
+            } else {
+                destination
+                    .iter()
+                    .filter(|(id, _)| id != &current)
+                    .take_while(|(_, rectangle)| {
+                        rectangle.loc.x + rectangle.size.w / 2. < current_center
+                    })
+                    .count()
+            };
+            destination_ids.insert(insert_idx, current.clone());
+
+            let destination_y = target
+                .as_ref()
+                .map_or(target_position.y, |(_, position, _)| position.y);
+            let rows = [
+                (&mut source_ids, current_rectangle.loc.y),
+                (&mut destination_ids, destination_y),
+            ];
+            for (ids, y) in rows {
+                if ids.is_empty() {
                     continue;
                 }
-                let height = column
-                    .tiles()
-                    .map(|(tile, offset)| offset.y + tile.tile_size().h)
-                    .fold(0., f64::max);
-                let shares_source_row = data.position.y
-                    < current_rectangle.loc.y + current_rectangle.size.h
-                    && current_rectangle.loc.y < data.position.y + height;
-                if shares_source_row
-                    && data.position.x
-                        >= current_rectangle.loc.x
-                            + current_rectangle.size.w
-                            + self.options.layout.gaps
-                {
-                    data.position.x -= collapse;
+                let current_tiles = self.spatial_tiles();
+                let total_width = ids
+                    .iter()
+                    .map(|id| {
+                        current_tiles
+                            .iter()
+                            .find(|(other, _, _)| other == id)
+                            .unwrap()
+                            .1
+                            .size
+                            .w
+                    })
+                    .sum::<f64>()
+                    + gap * (ids.len() - 1) as f64;
+                let mut x = cluster_center - total_width / 2.;
+                for id in ids.iter() {
+                    let (rectangle, column_idx, tile_idx) = {
+                        let (rectangle, _) = current_tiles
+                            .iter()
+                            .find_map(|(other, rectangle, order)| {
+                                (other == id).then_some((*rectangle, *order))
+                            })
+                            .unwrap();
+                        let column_idx = self
+                            .columns
+                            .iter()
+                            .position(|column| column.contains(id))
+                            .unwrap();
+                        let tile_idx = self.columns[column_idx].position(id).unwrap();
+                        (rectangle, column_idx, tile_idx)
+                    };
+                    let offset = self.columns[column_idx].tile_offset(tile_idx);
+                    self.data[column_idx].position.x = x - offset.x;
+                    if id == &current {
+                        self.data[column_idx].position.y = y - offset.y;
+                    }
+                    x += rectangle.size.w + gap;
                 }
             }
-        }
-        if target.is_some() {
-            let inserted_height = self.columns[inserted_at]
-                .tiles()
-                .map(|(tile, offset)| offset.y + tile.tile_size().h)
-                .fold(0., f64::max);
-            let inserted_width = self.data[inserted_at].width;
-            let shift = inserted_width + self.options.layout.gaps;
-            for (column, data) in zip(
-                &self.columns[inserted_at + 1..],
-                &mut self.data[inserted_at + 1..],
-            ) {
-                let height = column
+
+            let mut affected_ids = source_ids;
+            for id in destination_ids {
+                if !affected_ids.contains(&id) {
+                    affected_ids.push(id);
+                }
+            }
+            for blocker in blocker_components.as_ref().unwrap() {
+                let current_tiles = self.spatial_tiles();
+                let affected = current_tiles
+                    .iter()
+                    .filter(|(id, _, _)| affected_ids.contains(id))
+                    .map(|(_, rectangle, _)| *rectangle)
+                    .collect::<Vec<_>>();
+                let blocked = current_tiles
+                    .iter()
+                    .filter(|(id, _, _)| blocker.contains(id))
+                    .map(|(_, rectangle, _)| *rectangle)
+                    .collect::<Vec<_>>();
+                let blocker_center = blocked
+                    .iter()
+                    .map(|rectangle| rectangle.loc.x + rectangle.size.w / 2.)
+                    .sum::<f64>()
+                    / blocked.len() as f64;
+                let push_right = blocker_center >= cluster_center;
+                let mut shift: f64 = 0.;
+                for placed in &affected {
+                    for rectangle in &blocked {
+                        let overlaps_y = placed.loc.y < rectangle.loc.y + rectangle.size.h
+                            && rectangle.loc.y < placed.loc.y + placed.size.h;
+                        if !overlaps_y {
+                            continue;
+                        }
+                        if push_right {
+                            shift = shift.max(placed.loc.x + placed.size.w + gap - rectangle.loc.x);
+                        } else {
+                            shift = shift
+                                .min(placed.loc.x - gap - (rectangle.loc.x + rectangle.size.w));
+                        }
+                    }
+                }
+                if (push_right && shift > 0.) || (!push_right && shift < 0.) {
+                    for (column, data) in zip(&self.columns, &mut self.data) {
+                        if blocker.iter().any(|id| column.contains(id)) {
+                            data.position.x += shift;
+                        }
+                    }
+                    for id in blocker {
+                        if !affected_ids.contains(id) {
+                            affected_ids.push(id.clone());
+                        }
+                    }
+                }
+            }
+        } else {
+            if source_was_singleton {
+                let collapse = current_rectangle.size.w + self.options.layout.gaps;
+                for (idx, (column, data)) in zip(&self.columns, &mut self.data).enumerate() {
+                    if idx == inserted_at {
+                        continue;
+                    }
+                    let height = column
+                        .tiles()
+                        .map(|(tile, offset)| offset.y + tile.tile_size().h)
+                        .fold(0., f64::max);
+                    let shares_source_row = data.position.y
+                        < current_rectangle.loc.y + current_rectangle.size.h
+                        && current_rectangle.loc.y < data.position.y + height;
+                    if shares_source_row
+                        && data.position.x
+                            >= current_rectangle.loc.x
+                                + current_rectangle.size.w
+                                + self.options.layout.gaps
+                    {
+                        data.position.x -= collapse;
+                    }
+                }
+            }
+            if target.is_some() {
+                let inserted_height = self.columns[inserted_at]
                     .tiles()
                     .map(|(tile, offset)| offset.y + tile.tile_size().h)
                     .fold(0., f64::max);
-                let shares_row = data.position.y < target_position.y + inserted_height
-                    && target_position.y < data.position.y + height;
-                if shares_row && data.position.x >= target_position.x {
-                    data.position.x += shift;
+                let inserted_width = self.data[inserted_at].width;
+                let shift = inserted_width + self.options.layout.gaps;
+                for (column, data) in zip(
+                    &self.columns[inserted_at + 1..],
+                    &mut self.data[inserted_at + 1..],
+                ) {
+                    let height = column
+                        .tiles()
+                        .map(|(tile, offset)| offset.y + tile.tile_size().h)
+                        .fold(0., f64::max);
+                    let shares_row = data.position.y < target_position.y + inserted_height
+                        && target_position.y < data.position.y + height;
+                    if shares_row && data.position.x >= target_position.x {
+                        data.position.x += shift;
+                    }
                 }
             }
         }
 
-        self.placement.invalidate();
-        self.arrange_spatial(false);
+        if vertical {
+            self.placement.remember(&self.spatial_items());
+        } else {
+            self.placement.invalidate();
+            self.arrange_spatial(false);
+        }
         for (column, data) in zip(&mut self.columns, &self.data) {
             column.move_x_animation = None;
             column.move_y_animation = None;
@@ -5332,52 +5615,6 @@ impl<W: LayoutElement> Column<W> {
 
     fn focus_bottom(&mut self) {
         self.activate_idx(self.tiles.len() - 1);
-    }
-
-    fn move_up(&mut self) -> bool {
-        let new_idx = self.active_tile_idx.saturating_sub(1);
-        if self.active_tile_idx == new_idx {
-            return false;
-        }
-
-        let mut ys = self.tile_offsets().skip(self.active_tile_idx);
-        let active_y = ys.next().unwrap().y;
-        let next_y = ys.next().unwrap().y;
-        drop(ys);
-
-        self.tiles.swap(self.active_tile_idx, new_idx);
-        self.data.swap(self.active_tile_idx, new_idx);
-        self.active_tile_idx = new_idx;
-
-        // Animate the movement.
-        let new_active_y = self.tile_offset(new_idx).y;
-        self.tiles[new_idx].animate_move_y_from(active_y - new_active_y);
-        self.tiles[new_idx + 1].animate_move_y_from(active_y - next_y);
-
-        true
-    }
-
-    fn move_down(&mut self) -> bool {
-        let new_idx = min(self.active_tile_idx + 1, self.tiles.len() - 1);
-        if self.active_tile_idx == new_idx {
-            return false;
-        }
-
-        let mut ys = self.tile_offsets().skip(self.active_tile_idx);
-        let active_y = ys.next().unwrap().y;
-        let next_y = ys.next().unwrap().y;
-        drop(ys);
-
-        self.tiles.swap(self.active_tile_idx, new_idx);
-        self.data.swap(self.active_tile_idx, new_idx);
-        self.active_tile_idx = new_idx;
-
-        // Animate the movement.
-        let new_active_y = self.tile_offset(new_idx).y;
-        self.tiles[new_idx].animate_move_y_from(active_y - new_active_y);
-        self.tiles[new_idx - 1].animate_move_y_from(next_y - active_y);
-
-        true
     }
 
     fn toggle_width(&mut self, tile_idx: Option<usize>, forwards: bool) {

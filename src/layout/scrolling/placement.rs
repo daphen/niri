@@ -30,6 +30,13 @@ impl State {
         self.items.clear();
     }
 
+    pub fn remember(&mut self, items: &[Item]) {
+        self.items = items
+            .iter()
+            .map(|item| (item.id, item.order, item.size, item.app_id.clone()))
+            .collect();
+    }
+
     pub fn needs_arrange(&self, items: &[Item]) -> bool {
         self.items.len() != items.len()
             || items.iter().any(|item| {
