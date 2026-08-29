@@ -2647,6 +2647,92 @@ fn ipc_rectangles(
     rectangles
 }
 
+fn rendered_rectangles(
+    layout: &Layout<TestWindow>,
+) -> std::collections::BTreeMap<usize, Rectangle<f64, Logical>> {
+    layout
+        .active_workspace()
+        .unwrap()
+        .scrolling()
+        .tiles_with_render_positions()
+        .map(|(tile, position, _)| {
+            (
+                *tile.window().id(),
+                Rectangle::new(position, tile.tile_size()),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn production_actions_activate_new_windows_and_navigate_with_internal_workspaces() {
+    let mut layout = check_ops_with_options(Options::default(), [Op::AddOutput(1)]);
+
+    for (id, width, height) in [
+        (1, 620, 500),
+        (2, 360, 220),
+        (3, 420, 300),
+        (4, 280, 180),
+        (5, 500, 260),
+        (6, 320, 420),
+        (7, 460, 200),
+        (8, 300, 340),
+        (9, 380, 240),
+    ] {
+        let mut params = TestWindowParams::new(id);
+        params.app_id = Some("org.quickshell".into());
+        Op::AddWindow { params }.apply(&mut layout);
+        assert_eq!(*layout.focus().unwrap().id(), id);
+
+        layout.set_window_width(Some(&id), SizeChange::SetFixed(width));
+        layout.set_window_height(Some(&id), SizeChange::SetFixed(height));
+        Op::Communicate(id).apply(&mut layout);
+        layout.refresh(true);
+        assert_eq!(*layout.focus().unwrap().id(), id);
+    }
+    Op::CompleteAnimations.apply(&mut layout);
+    assert!(layout.workspaces().count() >= 2);
+
+    for (direction, action) in [
+        (0, Op::FocusColumnLeft),
+        (1, Op::FocusColumnRight),
+        (2, Op::FocusWindowUp),
+        (3, Op::FocusWindowDown),
+    ] {
+        let rectangles = ipc_rectangles(&layout);
+        let origin = rectangles
+            .iter()
+            .find(|(_, from)| {
+                rectangles.values().any(|to| match direction {
+                    0 => to.loc.x + to.size.w <= from.loc.x,
+                    1 => from.loc.x + from.size.w <= to.loc.x,
+                    2 => to.loc.y + to.size.h <= from.loc.y,
+                    3 => from.loc.y + from.size.h <= to.loc.y,
+                    _ => unreachable!(),
+                })
+            })
+            .map(|(id, _)| *id)
+            .unwrap();
+        layout.activate_window(&origin);
+        Op::CompleteAnimations.apply(&mut layout);
+        let before = ipc_rectangles(&layout);
+        action.apply(&mut layout);
+        let target = *layout.focus().unwrap().id();
+        assert_ne!(target, origin);
+        let from = before[&origin];
+        let to = before[&target];
+        assert!(match direction {
+            0 => to.loc.x + to.size.w <= from.loc.x,
+            1 => from.loc.x + from.size.w <= to.loc.x,
+            2 => to.loc.y + to.size.h <= from.loc.y,
+            3 => from.loc.y + from.size.h <= to.loc.y,
+            _ => unreachable!(),
+        });
+        assert!(layout.are_animations_ongoing(None));
+        Op::CompleteAnimations.apply(&mut layout);
+    }
+}
+
 #[test]
 fn spatial_move_extracts_only_middle_stack_window() {
     let (layout, _) = spatial_stack_move_fixture();
@@ -2849,6 +2935,69 @@ fn touchpad_pan_updates_both_camera_axes() {
         background
     );
     assert!(layout.view_offset_gesture_end(Some(true)).is_some());
+}
+
+#[test]
+fn diagonal_touchpad_release_focuses_nearest_window_and_preserves_continuity() {
+    let mut layout = check_ops([Op::AddOutput(1)]);
+    for (id, width, height) in [
+        (1, 900, 600),
+        (2, 700, 500),
+        (3, 1100, 650),
+        (4, 800, 450),
+        (5, 1000, 700),
+    ] {
+        Op::AddWindow {
+            params: TestWindowParams::new(id),
+        }
+        .apply(&mut layout);
+        layout.set_window_width(Some(&id), SizeChange::SetFixed(width));
+        layout.set_window_height(Some(&id), SizeChange::SetFixed(height));
+        Op::Communicate(id).apply(&mut layout);
+        layout.refresh(true);
+    }
+    Op::CompleteAnimations.apply(&mut layout);
+    layout.activate_window(&1);
+    Op::CompleteAnimations.apply(&mut layout);
+
+    let output = layout.outputs().next().unwrap().clone();
+    layout.view_offset_gesture_begin(&output, None, true);
+    layout.view_offset_gesture_update(Point::from((480., 320.)), Duration::from_millis(16), true);
+    layout.clock.set_unadjusted(Duration::from_millis(1000));
+    layout.view_offset_gesture_update(Point::from((0., 0.)), Duration::from_millis(1000), true);
+
+    let before = rendered_rectangles(&layout);
+    let viewport_center = Point::from((640., 360.));
+    let expected = before
+        .iter()
+        .min_by(|(_, a), (_, b)| {
+            let a = a.loc + a.size.to_point().downscale(2.) - viewport_center;
+            let b = b.loc + b.size.to_point().downscale(2.) - viewport_center;
+            (a.x * a.x + a.y * a.y).total_cmp(&(b.x * b.x + b.y * b.y))
+        })
+        .map(|(id, _)| *id)
+        .unwrap();
+    assert_ne!(expected, 1);
+
+    assert!(layout.view_offset_gesture_end(Some(true)).is_some());
+    assert_eq!(*layout.focus().unwrap().id(), expected);
+    let after = rendered_rectangles(&layout);
+    for id in before.keys() {
+        assert_eq!(before[id].loc, after[id].loc);
+    }
+
+    layout.clock.set_unadjusted(Duration::from_millis(1016));
+    layout.advance_animations();
+    let interrupted = rendered_rectangles(&layout);
+    layout.view_offset_gesture_begin(&output, None, true);
+    assert_eq!(interrupted, rendered_rectangles(&layout));
+    layout.view_offset_gesture_end(Some(true));
+    Op::CompleteAnimations.apply(&mut layout);
+
+    let focused = rendered_rectangles(&layout)[&expected];
+    let center = focused.loc + focused.size.to_point().downscale(2.);
+    assert!((center.x - viewport_center.x).abs() < 1.);
+    assert!((center.y - viewport_center.y).abs() < 1.);
 }
 
 #[test]

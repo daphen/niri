@@ -3448,24 +3448,73 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         if gesture.is_touchpad {
             let norm_y = self.working_area.size.h / VIEW_GESTURE_WORKING_AREA_MOVEMENT;
             let current_y = gesture.tracker_y.pos() * norm_y + gesture.delta_y_from_tracker;
-            let target_y =
+            let projected_y =
                 gesture.tracker_y.projected_end_pos() * norm_y + gesture.delta_y_from_tracker;
             let velocity_y = gesture.tracker_y.velocity() * norm_y;
-            let target_x =
+            let projected_x =
                 gesture.tracker.projected_end_pos() * norm_factor + gesture.delta_from_tracker;
+            let velocity_x = gesture.tracker.velocity() * norm_factor;
+            if self.columns.is_empty() {
+                self.view_offset = ViewOffset::Animation(Animation::new(
+                    self.clock.clone(),
+                    current_view_offset,
+                    projected_x,
+                    velocity_x,
+                    self.options.animations.horizontal_view_movement.0,
+                ));
+                self.view_y_offset = ViewOffset::Animation(Animation::new(
+                    self.clock.clone(),
+                    current_y,
+                    projected_y,
+                    velocity_y,
+                    self.options.animations.horizontal_view_movement.0,
+                ));
+                return true;
+            }
+            let current_view_x = self.data[self.active_column_idx].position.x + current_view_offset;
+            let projected_center = Point::from((
+                self.data[self.active_column_idx].position.x + projected_x + self.view_size.w / 2.,
+                projected_y + self.view_size.h / 2.,
+            ));
+            let (id, rectangle, _) = self
+                .spatial_tiles()
+                .into_iter()
+                .min_by(|(_, a, _), (_, b, _)| {
+                    let a = a.loc + a.size.to_point().downscale(2.) - projected_center;
+                    let b = b.loc + b.size.to_point().downscale(2.) - projected_center;
+                    (a.x * a.x + a.y * a.y).total_cmp(&(b.x * b.x + b.y * b.y))
+                })
+                .unwrap();
+            let (column_idx, tile_idx) = self
+                .columns
+                .iter()
+                .enumerate()
+                .find_map(|(column_idx, column)| {
+                    column.position(&id).map(|tile_idx| (column_idx, tile_idx))
+                })
+                .unwrap();
+            self.columns[column_idx].activate_idx(tile_idx);
+            self.activate_column(column_idx);
+
+            let target_center = rectangle.loc + rectangle.size.to_point().downscale(2.);
+            let target_view_x = target_center.x - self.view_size.w / 2.;
+            let target_view_y = target_center.y - self.view_size.h / 2.;
+            let current_view_offset = current_view_x - self.data[column_idx].position.x;
+            let target_view_offset = target_view_x - self.data[column_idx].position.x;
+            let config = self.options.animations.horizontal_view_movement.0;
             self.view_offset = ViewOffset::Animation(Animation::new(
                 self.clock.clone(),
                 current_view_offset,
-                target_x,
-                gesture.tracker.velocity() * norm_factor,
-                self.options.animations.horizontal_view_movement.0,
+                target_view_offset,
+                velocity_x,
+                config,
             ));
             self.view_y_offset = ViewOffset::Animation(Animation::new(
                 self.clock.clone(),
                 current_y,
-                target_y,
+                target_view_y,
                 velocity_y,
-                self.options.animations.horizontal_view_movement.0,
+                config,
             ));
             return true;
         }
