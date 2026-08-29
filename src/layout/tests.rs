@@ -2532,6 +2532,10 @@ fn spatial_layout_packs_variable_rectangles_and_navigates_both_axes() {
         layout.set_window_height(Some(&id), SizeChange::SetFixed(height));
         Op::Communicate(id).apply(&mut layout);
         layout.refresh(true);
+        if matches!(id, 3 | 6 | 9) {
+            layout.move_down();
+            Op::CompleteAnimations.apply(&mut layout);
+        }
     }
     Op::CompleteAnimations.apply(&mut layout);
 
@@ -2693,6 +2697,31 @@ fn production_actions_activate_new_windows_and_navigate_with_internal_workspaces
     Op::CompleteAnimations.apply(&mut layout);
     assert!(layout.workspaces().count() >= 2);
 
+    layout.activate_window(&4);
+    Op::CompleteAnimations.apply(&mut layout);
+    let mut params = TestWindowParams::new(10);
+    params.app_id = Some("org.quickshell".into());
+    Op::AddWindow { params }.apply(&mut layout);
+    let after_insert = ipc_rectangles(&layout);
+    let gap = Options::default().layout.gaps;
+    assert_eq!(*layout.focus().unwrap().id(), 10);
+    assert_eq!(after_insert[&10].loc.y, after_insert[&4].loc.y);
+    assert_eq!(
+        after_insert[&10].loc.x,
+        after_insert[&4].loc.x + after_insert[&4].size.w + gap
+    );
+    assert_eq!(
+        after_insert[&5].loc.x,
+        after_insert[&10].loc.x + after_insert[&10].size.w + gap
+    );
+    Op::CompleteAnimations.apply(&mut layout);
+    layout.activate_window(&3);
+    layout.move_down();
+    Op::CompleteAnimations.apply(&mut layout);
+    layout.activate_window(&6);
+    layout.move_up();
+    Op::CompleteAnimations.apply(&mut layout);
+
     for (direction, action) in [
         (0, Op::FocusColumnLeft),
         (1, Op::FocusColumnRight),
@@ -2746,10 +2775,57 @@ fn spatial_move_extracts_only_middle_stack_window() {
 fn spatial_move_pushes_destination_neighbor() {
     let (layout, before) = spatial_stack_move_fixture();
     let after = ipc_rectangles(&layout);
-    assert_ne!(
+    let gap = Options::default().layout.gaps;
+    assert_eq!(after[&1].size, before[&1].size);
+    assert_eq!(after[&3].size, before[&3].size);
+    assert!(after[&3].loc.x >= after[&1].loc.x + after[&1].size.w + gap);
+    assert_eq!(
         after[&3].loc - after[&4].loc,
         before[&3].loc - before[&4].loc
     );
+}
+
+#[test]
+fn spatial_move_creates_axis_slot_then_inserts_and_pushes_target_row() {
+    let mut layout = check_ops([Op::AddOutput(1)]);
+    for id in 1..=3 {
+        Op::AddWindow {
+            params: TestWindowParams::new(id),
+        }
+        .apply(&mut layout);
+    }
+    Op::CompleteAnimations.apply(&mut layout);
+    let sizes = ipc_rectangles(&layout)
+        .into_iter()
+        .map(|(id, rectangle)| (id, rectangle.size))
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    layout.activate_window(&2);
+    layout.move_down();
+    Op::CompleteAnimations.apply(&mut layout);
+    let vertical = ipc_rectangles(&layout);
+    assert!(vertical[&2].loc.y >= vertical[&1].loc.y + vertical[&1].size.h);
+
+    layout.activate_window(&1);
+    layout.move_down();
+    Op::CompleteAnimations.apply(&mut layout);
+    let lower_row = ipc_rectangles(&layout);
+    let gap = Options::default().layout.gaps;
+    assert_eq!(lower_row[&1].loc.y, lower_row[&2].loc.y);
+    assert_eq!(
+        lower_row[&2].loc.x,
+        lower_row[&1].loc.x + lower_row[&1].size.w + gap
+    );
+
+    layout.activate_window(&2);
+    layout.move_up();
+    Op::CompleteAnimations.apply(&mut layout);
+    let upper_row = ipc_rectangles(&layout);
+    assert_eq!(upper_row[&2].loc.y, upper_row[&3].loc.y);
+    assert!(upper_row[&3].loc.x >= upper_row[&2].loc.x + upper_row[&2].size.w + gap);
+    for (id, size) in sizes {
+        assert_eq!(upper_row[&id].size, size);
+    }
 }
 
 #[test]
@@ -2850,6 +2926,10 @@ fn spatial_pointer_hit_activates_off_origin_window_with_xy_camera() {
         Op::Communicate(id).apply(&mut layout);
         layout.refresh(true);
     }
+    layout.activate_window(&3);
+    layout.move_down();
+    Op::CompleteAnimations.apply(&mut layout);
+    layout.activate_window(&5);
     Op::CompleteAnimations.apply(&mut layout);
     let output = layout.outputs().next().unwrap().clone();
     let focused_position = |layout: &Layout<TestWindow>| {

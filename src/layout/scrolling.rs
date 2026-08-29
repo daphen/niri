@@ -1098,6 +1098,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         anim_config: Option<niri_config::Animation>,
     ) {
         let was_empty = self.columns.is_empty();
+        let insert_right_of_focus = idx.is_none() && !was_empty;
 
         let idx = idx.unwrap_or_else(|| {
             if was_empty {
@@ -1105,6 +1106,13 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             } else {
                 self.active_column_idx + 1
             }
+        });
+        let insertion_position = insert_right_of_focus.then(|| {
+            let previous = &self.data[idx - 1];
+            Point::from((
+                previous.position.x + previous.width + self.options.layout.gaps,
+                previous.position.y,
+            ))
         });
 
         column.update_config(
@@ -1121,17 +1129,30 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             self.active_column_idx += 1;
         }
 
-        // Animate movement of other columns.
-        let offset = self.column_x(idx + 1) - self.column_x(idx);
-        let config = anim_config.unwrap_or(self.options.animations.window_movement.0);
-        if self.active_column_idx <= idx {
-            for col in &mut self.columns[idx + 1..] {
-                col.animate_move_x_from_with_config(-offset, config);
+        if let Some(position) = insertion_position {
+            self.data[idx].position = position;
+            let inserted_height = self.columns[idx]
+                .tiles()
+                .map(|(tile, offset)| offset.y + tile.tile_size().h)
+                .fold(0., f64::max);
+            let shift = self.data[idx].width + self.options.layout.gaps;
+            for (column, data) in zip(&mut self.columns[idx + 1..], &mut self.data[idx + 1..]) {
+                let height = column
+                    .tiles()
+                    .map(|(tile, offset)| offset.y + tile.tile_size().h)
+                    .fold(0., f64::max);
+                let shares_row = data.position.y < position.y + inserted_height
+                    && position.y < data.position.y + height;
+                if shares_row && data.position.x >= position.x {
+                    data.position.x += shift;
+                    column.animate_move_x_from_with_config(
+                        -shift,
+                        anim_config.unwrap_or(self.options.animations.window_movement.0),
+                    );
+                }
             }
-        } else {
-            for col in &mut self.columns[..idx] {
-                col.animate_move_x_from_with_config(offset, config);
-            }
+            self.placement.invalidate();
+            self.arrange_spatial(false);
         }
 
         if activate {
@@ -1690,6 +1711,65 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             .collect()
     }
 
+    fn collision_free_slot(
+        &self,
+        current: &W::Id,
+        rectangle: Rectangle<f64, Logical>,
+        direction: navigation::Direction,
+    ) -> Point<f64, Logical> {
+        let gap = self.options.layout.gaps;
+        let occupied = self
+            .spatial_tiles()
+            .into_iter()
+            .filter_map(|(id, rectangle, _)| (&id != current).then_some(rectangle))
+            .collect::<Vec<_>>();
+        let mut position = match direction {
+            navigation::Direction::Left => {
+                Point::from((rectangle.loc.x - rectangle.size.w - gap, rectangle.loc.y))
+            }
+            navigation::Direction::Right => {
+                Point::from((rectangle.loc.x + rectangle.size.w + gap, rectangle.loc.y))
+            }
+            navigation::Direction::Up => {
+                Point::from((rectangle.loc.x, rectangle.loc.y - rectangle.size.h - gap))
+            }
+            navigation::Direction::Down => {
+                Point::from((rectangle.loc.x, rectangle.loc.y + rectangle.size.h + gap))
+            }
+        };
+        loop {
+            let candidate = Rectangle::new(position, rectangle.size);
+            let collisions = occupied.iter().filter(|other| {
+                candidate.loc.x < other.loc.x + other.size.w + gap
+                    && other.loc.x < candidate.loc.x + candidate.size.w + gap
+                    && candidate.loc.y < other.loc.y + other.size.h + gap
+                    && other.loc.y < candidate.loc.y + candidate.size.h + gap
+            });
+            let next = match direction {
+                navigation::Direction::Left => collisions
+                    .map(|other| other.loc.x - rectangle.size.w - gap)
+                    .min_by(f64::total_cmp)
+                    .map(|x| Point::from((x, position.y))),
+                navigation::Direction::Right => collisions
+                    .map(|other| other.loc.x + other.size.w + gap)
+                    .max_by(f64::total_cmp)
+                    .map(|x| Point::from((x, position.y))),
+                navigation::Direction::Up => collisions
+                    .map(|other| other.loc.y - rectangle.size.h - gap)
+                    .min_by(f64::total_cmp)
+                    .map(|y| Point::from((position.x, y))),
+                navigation::Direction::Down => collisions
+                    .map(|other| other.loc.y + other.size.h + gap)
+                    .max_by(f64::total_cmp)
+                    .map(|y| Point::from((position.x, y))),
+            };
+            let Some(next) = next else {
+                return position;
+            };
+            position = next;
+        }
+    }
+
     fn focus_spatial(&mut self, direction: navigation::Direction) -> bool {
         let Some(current) = self.active_window().map(|window| window.id().clone()) else {
             return false;
@@ -1868,19 +1948,26 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             return false;
         };
         let tiles = self.spatial_tiles();
-        let Some(target) = navigation::nearest(&current, direction, &tiles) else {
-            return false;
-        };
-        let target_position = tiles
+        let current_rectangle = tiles
             .iter()
-            .find_map(|(id, rectangle, _)| (id == &target).then_some(rectangle.loc))
+            .find_map(|(id, rectangle, _)| (id == &current).then_some(*rectangle))
             .unwrap();
-        let target_column = self
-            .columns
-            .iter()
-            .position(|column| column.contains(&target))
-            .unwrap();
-        if target_column == self.active_column_idx {
+        let target = navigation::nearest(&current, direction, &tiles).map(|target| {
+            let position = tiles
+                .iter()
+                .find_map(|(id, rectangle, _)| (id == &target).then_some(rectangle.loc))
+                .unwrap();
+            let column = self
+                .columns
+                .iter()
+                .position(|column| column.contains(&target))
+                .unwrap();
+            (target, position, column)
+        });
+        if target
+            .as_ref()
+            .is_some_and(|(_, _, column)| *column == self.active_column_idx)
+        {
             return match direction {
                 navigation::Direction::Up => self.columns[self.active_column_idx].move_up(),
                 navigation::Direction::Down => self.columns[self.active_column_idx].move_down(),
@@ -1889,6 +1976,32 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         }
 
         let source_column = self.active_column_idx;
+        let source_was_singleton = self.columns[source_column].tiles.len() == 1;
+        let mut target_position = target.as_ref().map_or_else(
+            || self.collision_free_slot(&current, current_rectangle, direction),
+            |(_, position, _)| *position,
+        );
+        if source_was_singleton {
+            if let Some((target, _, _)) = &target {
+                let rectangle = tiles
+                    .iter()
+                    .find_map(|(id, rectangle, _)| (id == target).then_some(*rectangle))
+                    .unwrap();
+                let shares_source_row = rectangle.loc.y
+                    < current_rectangle.loc.y + current_rectangle.size.h
+                    && current_rectangle.loc.y < rectangle.loc.y + rectangle.size.h;
+                if shares_source_row && target_position.x > current_rectangle.loc.x {
+                    target_position.x -= current_rectangle.size.w + self.options.layout.gaps;
+                }
+            }
+        }
+        let target_column = target.as_ref().map_or_else(
+            || match direction {
+                navigation::Direction::Left | navigation::Direction::Up => source_column,
+                navigation::Direction::Right | navigation::Direction::Down => source_column + 1,
+            },
+            |(_, _, column)| *column,
+        );
         let source_tile = self.columns[source_column].active_tile_idx;
         let view_before = self.spatial_view_pos();
         let source_origin = self.data[source_column].position
@@ -1929,7 +2042,54 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             );
             target_column
         };
-        self.data[inserted_at].position = target_position;
+        let inserted_tile_offset =
+            self.columns[inserted_at].tile_offset(self.columns[inserted_at].active_tile_idx);
+        self.data[inserted_at].position = target_position - inserted_tile_offset;
+        if source_was_singleton {
+            let collapse = current_rectangle.size.w + self.options.layout.gaps;
+            for (idx, (column, data)) in zip(&self.columns, &mut self.data).enumerate() {
+                if idx == inserted_at {
+                    continue;
+                }
+                let height = column
+                    .tiles()
+                    .map(|(tile, offset)| offset.y + tile.tile_size().h)
+                    .fold(0., f64::max);
+                let shares_source_row = data.position.y
+                    < current_rectangle.loc.y + current_rectangle.size.h
+                    && current_rectangle.loc.y < data.position.y + height;
+                if shares_source_row
+                    && data.position.x
+                        >= current_rectangle.loc.x
+                            + current_rectangle.size.w
+                            + self.options.layout.gaps
+                {
+                    data.position.x -= collapse;
+                }
+            }
+        }
+        if target.is_some() {
+            let inserted_height = self.columns[inserted_at]
+                .tiles()
+                .map(|(tile, offset)| offset.y + tile.tile_size().h)
+                .fold(0., f64::max);
+            let inserted_width = self.data[inserted_at].width;
+            let shift = inserted_width + self.options.layout.gaps;
+            for (column, data) in zip(
+                &self.columns[inserted_at + 1..],
+                &mut self.data[inserted_at + 1..],
+            ) {
+                let height = column
+                    .tiles()
+                    .map(|(tile, offset)| offset.y + tile.tile_size().h)
+                    .fold(0., f64::max);
+                let shares_row = data.position.y < target_position.y + inserted_height
+                    && target_position.y < data.position.y + height;
+                if shares_row && data.position.x >= target_position.x {
+                    data.position.x += shift;
+                }
+            }
+        }
 
         self.placement.invalidate();
         self.arrange_spatial(false);
