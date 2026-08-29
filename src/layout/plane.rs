@@ -36,8 +36,8 @@ struct PlaneBounds {
 
 #[derive(Debug)]
 struct PlaneAnimation {
-    x: Animation,
-    y: Animation,
+    x: Option<Animation>,
+    y: Option<Animation>,
 }
 
 impl Plane {
@@ -56,7 +56,16 @@ impl Plane {
 
     pub(super) fn position(&self) -> Point<f64, Logical> {
         self.animation.as_ref().map_or(self.position, |animation| {
-            Point::from((animation.x.value(), animation.y.value()))
+            Point::from((
+                animation
+                    .x
+                    .as_ref()
+                    .map_or(self.position.x, Animation::value),
+                animation
+                    .y
+                    .as_ref()
+                    .map_or(self.position.y, Animation::value),
+            ))
         })
     }
 
@@ -91,8 +100,12 @@ impl Plane {
 
         self.position += delta;
         if let Some(animation) = &mut self.animation {
-            animation.x.offset(delta.x);
-            animation.y.offset(delta.y);
+            if let Some(x) = &mut animation.x {
+                x.offset(delta.x);
+            }
+            if let Some(y) = &mut animation.y {
+                y.offset(delta.y);
+            }
         }
         self.scale = scale;
         self.scale_animation = None;
@@ -160,10 +173,17 @@ impl Plane {
         let current = self.position();
         let target = self.clamp(target);
         self.position = target;
-        self.animation = Some(PlaneAnimation {
-            x: Animation::new(clock.clone(), current.x, target.x, 0., config),
-            y: Animation::new(clock, current.y, target.y, 0., config),
-        });
+        let x_delta = target.x - current.x;
+        let y_delta = target.y - current.y;
+        let x = (current.x.is_finite()
+            && target.x.is_finite()
+            && (0.000_001..=1_000_000_000.).contains(&x_delta.abs()))
+        .then(|| Animation::new(clock.clone(), current.x, target.x, 0., config));
+        let y = (current.y.is_finite()
+            && target.y.is_finite()
+            && (0.000_001..=1_000_000_000.).contains(&y_delta.abs()))
+        .then(|| Animation::new(clock, current.y, target.y, 0., config));
+        self.animation = (x.is_some() || y.is_some()).then_some(PlaneAnimation { x, y });
     }
 
     pub(super) fn animate_to_view(
@@ -176,15 +196,17 @@ impl Plane {
         let current_scale = self.scale();
         self.animate_to(target, clock.clone(), config);
         self.scale = view.scale;
-        self.scale_animation = Some(Animation::new(clock, current_scale, view.scale, 0., config));
+        self.scale_animation = (current_scale.is_finite()
+            && view.scale.is_finite()
+            && (0.000_001..=1_000_000_000.).contains(&(view.scale - current_scale).abs()))
+        .then(|| Animation::new(clock, current_scale, view.scale, 0., config));
     }
 
     pub(super) fn advance_animations(&mut self) {
-        if self
-            .animation
-            .as_ref()
-            .is_some_and(|animation| animation.x.is_done() && animation.y.is_done())
-        {
+        if self.animation.as_ref().is_some_and(|animation| {
+            animation.x.as_ref().is_none_or(Animation::is_done)
+                && animation.y.as_ref().is_none_or(Animation::is_done)
+        }) {
             self.animation = None;
         }
         if self

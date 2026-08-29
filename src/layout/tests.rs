@@ -3774,6 +3774,30 @@ fn window_hit_center(
 }
 
 #[test]
+fn plane_pan_after_pinch_with_stationary_axis_does_not_animate_nan() {
+    check_ops([
+        Op::AddScaledOutput {
+            id: 1,
+            scale: 1.5,
+            layout_config: None,
+        },
+        Op::PlanePinchUpdate {
+            output_idx: 1,
+            centroid_x: 0.,
+            centroid_y: 565.0371352503984,
+            dx: 0.,
+            dy: 283.49891894570027,
+            scale_delta: 0.6029554595242679,
+        },
+        Op::PlanePan {
+            output_idx: 1,
+            dx: 0.,
+            dy: -254.65690147890237,
+        },
+    ]);
+}
+
+#[test]
 fn plane_pan_updates_both_axes() {
     let windows = (1..=2).map(|id| {
         let mut params = TestWindowParams::new(id);
