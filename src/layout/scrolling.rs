@@ -458,7 +458,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         self.columns.iter_mut().flat_map(|col| col.tiles.iter_mut())
     }
 
-    pub(super) fn plane_items(&self, orders: &[(W::Id, u64)]) -> Vec<placement::Item> {
+    pub(super) fn plane_items(&self, order: &[W::Id]) -> Vec<placement::Item> {
         let positions = self.column_xs(self.data.iter().copied());
         zip(self.columns.iter(), positions)
             .filter_map(|(column, natural_x)| {
@@ -466,10 +466,10 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                     .tiles
                     .iter()
                     .filter_map(|tile| {
-                        orders
+                        order
                             .iter()
-                            .find(|(id, _)| id == tile.window().id())
-                            .map(|(_, order)| (tile.window(), *order))
+                            .position(|id| id == tile.window().id())
+                            .map(|order| (tile.window(), order as u64))
                     })
                     .min_by_key(|(_, order)| *order)?;
                 let height = column
@@ -510,36 +510,30 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         }
     }
 
-    pub(super) fn plane_column_id(&self, window: &W::Id) -> Option<ColumnId> {
+    pub(super) fn plane_tile_indices(&self, window: &W::Id) -> Option<(usize, usize)> {
         self.columns
             .iter()
-            .find(|column| column.tiles.iter().any(|tile| tile.window().id() == window))
-            .map(|column| column.id)
+            .enumerate()
+            .find_map(|(column_idx, column)| {
+                column
+                    .tiles
+                    .iter()
+                    .position(|tile| tile.window().id() == window)
+                    .map(|tile_idx| (column_idx, tile_idx))
+            })
     }
 
-    pub(super) fn plane_column_position(&self, id: ColumnId) -> Option<Point<f64, Logical>> {
-        let index = self.columns.iter().position(|column| column.id == id)?;
-        Some(Point::from((self.column_x(index), 0.)) + self.columns[index].plane_offset)
-    }
-
-    pub(super) fn set_plane_column_position(
+    pub(super) fn apply_plane_reflow(
         &mut self,
-        id: ColumnId,
-        position: Point<f64, Logical>,
+        instructions: &[reflow::Instruction<W::Id>],
+        config: niri_config::Animation,
     ) {
-        if let Some(index) = self.columns.iter().position(|column| column.id == id) {
-            let natural = Point::from((self.column_x(index), 0.));
-            self.columns[index].plane_offset = position - natural;
-        }
-    }
-
-    pub(super) fn apply_plane_reflow(&mut self, instructions: &[reflow::Instruction<W::Id>]) {
         for tile in self.tiles_mut() {
             if let Some(instruction) = instructions
                 .iter()
                 .find(|instruction| &instruction.id == tile.window().id())
             {
-                tile.animate_move_from(instruction.offset);
+                tile.animate_move_from_with_config(instruction.offset, config);
             }
         }
     }
@@ -1885,203 +1879,154 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     }
 
     pub fn consume_or_expel_window_left(&mut self, window: Option<&W::Id>) {
-        if self.columns.is_empty() {
+        let Some((source_col, _, source)) = self.move_source(window) else {
+            return;
+        };
+        if source_col == 0 {
             return;
         }
-
-        let (source_col_idx, source_tile_idx) = if let Some(window) = window {
-            self.columns
-                .iter_mut()
-                .enumerate()
-                .find_map(|(col_idx, col)| {
-                    col.tiles
-                        .iter()
-                        .position(|tile| tile.window().id() == window)
-                        .map(|tile_idx| (col_idx, tile_idx))
-                })
-                .unwrap()
-        } else {
-            let source_col_idx = self.active_column_idx;
-            let source_tile_idx = self.columns[self.active_column_idx].active_tile_idx;
-            (source_col_idx, source_tile_idx)
-        };
-
-        let source_column = &self.columns[source_col_idx];
-        let prev_off = source_column.tile_offset(source_tile_idx);
-
-        let source_tile_was_active = self.active_column_idx == source_col_idx
-            && source_column.active_tile_idx == source_tile_idx;
-
-        if source_column.tiles.len() == 1 {
-            if source_col_idx == 0 {
-                return;
-            }
-
-            // Move into adjacent column.
-            let target_column_idx = source_col_idx - 1;
-
-            let offset = if self.active_column_idx <= source_col_idx {
-                // Tiles to the right animate from the following column.
-                self.column_x(source_col_idx) - self.column_x(target_column_idx)
-            } else {
-                // Tiles to the left animate to preserve their right edge position.
-                f64::max(
-                    0.,
-                    self.data[target_column_idx].width - self.data[source_col_idx].width,
-                )
-            };
-            let mut offset = Point::from((offset, 0.));
-
-            if source_tile_was_active {
-                // Make sure the previous (target) column is activated so the animation looks right.
-                //
-                // However, if it was already going to be activated, leave the offset as is. This
-                // improves the workflow that has become common with tabbed columns: open a new
-                // window, then immediately consume it left as a new tab.
-                self.activate_prev_column_on_removal
-                    .get_or_insert(self.view_offset.stationary() + offset.x);
-            }
-
-            offset += self.columns[source_col_idx].render_offset();
-            let RemovedTile { tile, .. } = self.remove_tile_by_idx(
-                source_col_idx,
-                0,
-                Transaction::new(),
-                Some(self.options.animations.window_movement.0),
-            );
-            self.add_tile_to_column(target_column_idx, None, tile, source_tile_was_active);
-
-            let target_column = &mut self.columns[target_column_idx];
-            offset -= target_column.render_offset();
-            offset += prev_off - target_column.tile_offset(target_column.tiles.len() - 1);
-
-            let new_tile = target_column.tiles.last_mut().unwrap();
-            new_tile.animate_move_from(offset);
-        } else {
-            // Move out of column.
-            let mut offset = source_column.render_offset();
-
-            let removed =
-                self.remove_tile_by_idx(source_col_idx, source_tile_idx, Transaction::new(), None);
-
-            // We're inserting into the source column position.
-            let target_column_idx = source_col_idx;
-
-            self.add_tile(
-                Some(target_column_idx),
-                removed.tile,
-                source_tile_was_active,
-                removed.width,
-                removed.is_full_width,
-                Some(self.options.animations.window_movement.0),
-            );
-
-            if source_tile_was_active {
-                // We added to the left, don't activate even further left on removal.
-                self.activate_prev_column_on_removal = None;
-            }
-
-            if target_column_idx <= self.active_column_idx {
-                // Tiles to the left animate from the following column.
-                offset.x += self.column_x(target_column_idx + 1) - self.column_x(target_column_idx);
-            }
-
-            let new_col = &mut self.columns[target_column_idx];
-            offset += prev_off - new_col.tile_offset(0);
-            new_col.tiles[0].animate_move_from(offset);
-        }
+        let target_column = &self.columns[source_col - 1];
+        let target = target_column.tiles[target_column.active_tile_idx]
+            .window()
+            .id()
+            .clone();
+        self.move_tile_to(
+            &source,
+            &target,
+            true,
+            None,
+            self.options.animations.window_movement.0,
+            None,
+        );
     }
 
     pub fn consume_or_expel_window_right(&mut self, window: Option<&W::Id>) {
-        if self.columns.is_empty() {
+        let Some((source_col, _, source)) = self.move_source(window) else {
+            return;
+        };
+        if source_col + 1 == self.columns.len() {
             return;
         }
+        let target_column = &self.columns[source_col + 1];
+        let target = target_column.tiles[target_column.active_tile_idx]
+            .window()
+            .id()
+            .clone();
+        self.move_tile_to(
+            &source,
+            &target,
+            false,
+            None,
+            self.options.animations.window_movement.0,
+            None,
+        );
+    }
 
-        let (source_col_idx, source_tile_idx) = if let Some(window) = window {
-            self.columns
-                .iter_mut()
-                .enumerate()
-                .find_map(|(col_idx, col)| {
-                    col.tiles
-                        .iter()
-                        .position(|tile| tile.window().id() == window)
-                        .map(|tile_idx| (col_idx, tile_idx))
-                })
-                .unwrap()
-        } else {
-            let source_col_idx = self.active_column_idx;
-            let source_tile_idx = self.columns[self.active_column_idx].active_tile_idx;
-            (source_col_idx, source_tile_idx)
+    fn move_source(&self, window: Option<&W::Id>) -> Option<(usize, usize, W::Id)> {
+        let id = window
+            .cloned()
+            .or_else(|| self.active_window().map(|window| window.id().clone()))?;
+        let (column, tile) = self.plane_tile_indices(&id)?;
+        Some((column, tile, id))
+    }
+
+    pub(super) fn move_tile_to(
+        &mut self,
+        window: &W::Id,
+        target: &W::Id,
+        new_column_after_target: bool,
+        stack_insert_after_target: Option<bool>,
+        config: niri_config::Animation,
+        other: Option<&mut Self>,
+    ) -> bool {
+        let Some((source_col, source_tile)) = self.plane_tile_indices(window) else {
+            return false;
         };
-
-        let cur_x = self.column_x(source_col_idx);
-
-        let source_column = &self.columns[source_col_idx];
-        let mut offset = source_column.render_offset();
-        let prev_off = source_column.tile_offset(source_tile_idx);
-
-        let source_tile_was_active = self.active_column_idx == source_col_idx
-            && source_column.active_tile_idx == source_tile_idx;
-
-        if source_column.tiles.len() == 1 {
-            if source_col_idx + 1 == self.columns.len() {
-                return;
-            }
-
-            // Move into adjacent column.
-            let target_column_idx = source_col_idx;
-
-            offset.x += cur_x - self.column_x(source_col_idx + 1);
-            offset -= self.columns[source_col_idx + 1].render_offset();
-
-            if source_tile_was_active {
-                // Make sure the target column gets activated.
-                self.activate_prev_column_on_removal = None;
-            }
-
-            let RemovedTile { tile, .. } = self.remove_tile_by_idx(
-                source_col_idx,
-                0,
-                Transaction::new(),
-                Some(self.options.animations.window_movement.0),
+        let source_was_single = self.columns[source_col].tiles.len() == 1;
+        let window_height = self.columns[source_col].tiles[source_tile]
+            .window_size()
+            .h
+            .round() as i32;
+        let old_position = self
+            .tiles_with_render_positions()
+            .find_map(|(tile, position, _)| (tile.window().id() == window).then_some(position))
+            .unwrap();
+        let removed =
+            self.remove_tile_by_idx(source_col, source_tile, Transaction::new(), Some(config));
+        if let Some(other) = other {
+            Self::insert_moved_tile(
+                other,
+                removed,
+                window,
+                target,
+                source_was_single,
+                window_height,
+                old_position,
+                new_column_after_target,
+                stack_insert_after_target,
+                config,
             );
-            self.add_tile_to_column(target_column_idx, None, tile, source_tile_was_active);
-
-            let target_column = &mut self.columns[target_column_idx];
-            offset += prev_off - target_column.tile_offset(target_column.tiles.len() - 1);
-
-            let new_tile = target_column.tiles.last_mut().unwrap();
-            new_tile.animate_move_from(offset);
         } else {
-            // Move out of column.
-            let prev_width = self.data[source_col_idx].width;
-
-            let removed =
-                self.remove_tile_by_idx(source_col_idx, source_tile_idx, Transaction::new(), None);
-
-            let target_column_idx = source_col_idx + 1;
-
-            self.add_tile(
-                Some(target_column_idx),
-                removed.tile,
-                source_tile_was_active,
-                removed.width,
-                removed.is_full_width,
-                Some(self.options.animations.window_movement.0),
+            Self::insert_moved_tile(
+                self,
+                removed,
+                window,
+                target,
+                source_was_single,
+                window_height,
+                old_position,
+                new_column_after_target,
+                stack_insert_after_target,
+                config,
             );
-
-            offset.x += if self.active_column_idx <= target_column_idx {
-                // Tiles to the right animate to the following column.
-                cur_x - self.column_x(target_column_idx)
-            } else {
-                // Tiles to the left animate for a change in width.
-                -f64::max(0., prev_width - self.data[target_column_idx].width)
-            };
-
-            let new_col = &mut self.columns[target_column_idx];
-            offset += prev_off - new_col.tile_offset(0);
-            new_col.tiles[0].animate_move_from(offset);
         }
+        true
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn insert_moved_tile(
+        space: &mut Self,
+        removed: RemovedTile<W>,
+        window: &W::Id,
+        target: &W::Id,
+        source_was_single: bool,
+        window_height: i32,
+        old_position: Point<f64, Logical>,
+        new_column_after_target: bool,
+        stack_insert_after_target: Option<bool>,
+        config: niri_config::Animation,
+    ) {
+        let (target_col, target_tile) = space.plane_tile_indices(target).unwrap();
+        let width = removed.width;
+        let is_full_width = removed.is_full_width;
+        if source_was_single {
+            let tile_idx = stack_insert_after_target.map(|after| target_tile + usize::from(after));
+            space.add_tile_to_column(target_col, tile_idx, removed.tile, true);
+            space.columns[target_col].width = width;
+            space.columns[target_col].is_full_width = is_full_width;
+            space.columns[target_col].update_tile_sizes(true);
+            space.data[target_col].update(&space.columns[target_col]);
+        } else {
+            space.add_tile(
+                Some(target_col + usize::from(new_column_after_target)),
+                removed.tile,
+                true,
+                width,
+                is_full_width,
+                Some(config),
+            );
+        }
+        let (column, tile) = space.plane_tile_indices(window).unwrap();
+        space.columns[column].set_window_height(
+            SizeChange::SetFixed(window_height),
+            Some(tile),
+            false,
+        );
+        let (tile, new_position) = space
+            .tiles_with_render_positions_mut(false)
+            .find(|(tile, _)| tile.window().id() == window)
+            .unwrap();
+        tile.animate_move_from_with_config(old_position - new_position, config);
     }
 
     pub fn consume_into_column(&mut self) {
@@ -2497,9 +2442,8 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
     fn columns_with_render_positions_at(
         &self,
-        view_x: f64,
+        _view_x: f64,
     ) -> impl Iterator<Item = (&Column<W>, Point<f64, Logical>)> {
-        let _ = view_x;
         self.columns_in_render_order().map(move |(col, col_x)| {
             let natural = Point::from((col_x, 0.));
             let pos = natural + col.plane_offset + col.render_offset();
@@ -3050,7 +2994,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         &self,
         mut ctx: RenderCtx<R>,
         xray_pos: XrayPos,
-        plane_view_x: f64,
+        plane_view: Rectangle<f64, Logical>,
         focus_ring: bool,
         layer: RenderLayer,
         push: &mut dyn FnMut(ScrollingSpaceRenderElement<R>),
@@ -3059,8 +3003,8 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
         // Draw the closing windows on top of the other windows.
         if layer.is_normal() {
-            let view_rect = Rectangle::new(Point::from((plane_view_x, 0.)), self.view_size);
             for closing in self.closing_windows.iter().rev() {
+                let view_rect = plane_view;
                 let elem = closing.render(ctx.as_gles(), view_rect, scale);
                 push(elem.into());
             }
@@ -3073,7 +3017,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         let mut first = true;
 
         // This matches self.tiles_with_render_positions().
-        for (col, col_pos) in self.columns_with_render_positions_at(plane_view_x) {
+        for (col, col_pos) in self.columns_with_render_positions() {
             // Skip columns belonging to a different render layer.
             if layer.is_normal() == col.is_moving_between_workspaces() {
                 first = false;

@@ -1999,8 +1999,9 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn focus_window_up_or_output(&mut self, output: &Output) -> bool {
-        if let Some(workspace) = self.active_workspace_mut() {
-            if workspace.focus_up() {
+        if let Some(monitor) = self.active_monitor() {
+            if monitor.active_workspace().focus_up() {
+                monitor.center_active_window_if_always();
                 return false;
             }
         }
@@ -2010,8 +2011,9 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn focus_window_down_or_output(&mut self, output: &Output) -> bool {
-        if let Some(workspace) = self.active_workspace_mut() {
-            if workspace.focus_down() {
+        if let Some(monitor) = self.active_monitor() {
+            if monitor.active_workspace().focus_down() {
+                monitor.center_active_window_if_always();
                 return false;
             }
         }
@@ -2045,10 +2047,11 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn focus_window_in_column(&mut self, index: u8) {
-        let Some(workspace) = self.active_workspace_mut() else {
+        let Some(monitor) = self.active_monitor() else {
             return;
         };
-        workspace.focus_window_in_column(index);
+        monitor.active_workspace().focus_window_in_column(index);
+        monitor.center_active_window_if_always();
     }
 
     pub fn focus_down(&mut self) {
@@ -2064,31 +2067,35 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn focus_down_or_left(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
+        let Some(monitor) = self.active_monitor() else {
             return;
         };
-        workspace.focus_down_or_left();
+        monitor.active_workspace().focus_down_or_left();
+        monitor.center_active_window_if_always();
     }
 
     pub fn focus_down_or_right(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
+        let Some(monitor) = self.active_monitor() else {
             return;
         };
-        workspace.focus_down_or_right();
+        monitor.active_workspace().focus_down_or_right();
+        monitor.center_active_window_if_always();
     }
 
     pub fn focus_up_or_left(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
+        let Some(monitor) = self.active_monitor() else {
             return;
         };
-        workspace.focus_up_or_left();
+        monitor.active_workspace().focus_up_or_left();
+        monitor.center_active_window_if_always();
     }
 
     pub fn focus_up_or_right(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
+        let Some(monitor) = self.active_monitor() else {
             return;
         };
-        workspace.focus_up_or_right();
+        monitor.active_workspace().focus_up_or_right();
+        monitor.center_active_window_if_always();
     }
 
     pub fn focus_window_or_workspace_down(&mut self) {
@@ -2106,31 +2113,35 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn focus_window_top(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
+        let Some(monitor) = self.active_monitor() else {
             return;
         };
-        workspace.focus_window_top();
+        monitor.active_workspace().focus_window_top();
+        monitor.center_active_window_if_always();
     }
 
     pub fn focus_window_bottom(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
+        let Some(monitor) = self.active_monitor() else {
             return;
         };
-        workspace.focus_window_bottom();
+        monitor.active_workspace().focus_window_bottom();
+        monitor.center_active_window_if_always();
     }
 
     pub fn focus_window_down_or_top(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
+        let Some(monitor) = self.active_monitor() else {
             return;
         };
-        workspace.focus_window_down_or_top();
+        monitor.active_workspace().focus_window_down_or_top();
+        monitor.center_active_window_if_always();
     }
 
     pub fn focus_window_up_or_bottom(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
+        let Some(monitor) = self.active_monitor() else {
             return;
         };
-        workspace.focus_window_up_or_bottom();
+        monitor.active_workspace().focus_window_up_or_bottom();
+        monitor.center_active_window_if_always();
     }
 
     pub fn move_to_workspace_up(&mut self, focus: bool) {
@@ -3249,24 +3260,27 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn focus_floating(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
+        let Some(monitor) = self.active_monitor() else {
             return;
         };
-        workspace.focus_floating();
+        monitor.active_workspace().focus_floating();
+        monitor.center_active_window_if_always();
     }
 
     pub fn focus_tiling(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
+        let Some(monitor) = self.active_monitor() else {
             return;
         };
-        workspace.focus_tiling();
+        monitor.active_workspace().focus_tiling();
+        monitor.center_active_window_if_always();
     }
 
     pub fn switch_focus_floating_tiling(&mut self) {
-        let Some(workspace) = self.active_workspace_mut() else {
+        let Some(monitor) = self.active_monitor() else {
             return;
         };
-        workspace.switch_focus_floating_tiling();
+        monitor.active_workspace().switch_focus_floating_tiling();
+        monitor.center_active_window_if_always();
     }
 
     pub fn move_floating_window(
@@ -3301,9 +3315,10 @@ impl<W: LayoutElement> Layout<W> {
             ..
         } = &mut self.monitor_set
         {
-            for (idx, mon) in monitors.iter().enumerate() {
+            for (idx, mon) in monitors.iter_mut().enumerate() {
                 if &mon.output == output {
                     *active_monitor_idx = idx;
+                    mon.center_active_window_if_always();
                     return;
                 }
             }

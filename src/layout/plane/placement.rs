@@ -46,19 +46,6 @@ impl State {
         self.groups.clear();
     }
 
-    pub fn sync_anchor(&mut self, item: &Item, items: &[Item], position: Point<f64, Logical>) {
-        let Some(app_id) = &item.app_id else {
-            return;
-        };
-        if items
-            .iter()
-            .filter(|other| other.app_id.as_ref() == Some(app_id))
-            .all(|other| item.order <= other.order)
-        {
-            self.anchors.insert(app_id.clone(), position);
-        }
-    }
-
     pub fn arrange(&mut self, items: &[Item], gap: f64) -> Vec<Target> {
         let mut grouped = BTreeMap::<GroupKey, Vec<&Item>>::new();
         for item in items {
@@ -91,10 +78,8 @@ impl State {
                     .get(app_id)
                     .copied()
                     .or(anchor.current)
-                    .filter(|position| free(Rectangle::new(*position, anchor.size), &occupied))
-                    .unwrap_or_else(|| {
-                        nearest_free(Point::default(), anchor.size, anchor.size, gap, &occupied)
-                    });
+                    .filter(|position| free(Rectangle::new(*position, anchor.size), gap, &occupied))
+                    .unwrap_or_else(|| nearest_free(Point::default(), anchor.size, gap, &occupied));
                 self.anchors.insert(app_id.clone(), position);
                 occupied.push(Rectangle::new(position, anchor.size));
             }
@@ -121,13 +106,11 @@ impl State {
                 .as_ref()
                 .and_then(|app| self.anchors.get(app).copied())
                 .or_else(|| {
-                    anchor
-                        .current
-                        .filter(|position| free(Rectangle::new(*position, anchor.size), &occupied))
+                    anchor.current.filter(|position| {
+                        free(Rectangle::new(*position, anchor.size), gap, &occupied)
+                    })
                 })
-                .unwrap_or_else(|| {
-                    nearest_free(Point::default(), anchor.size, anchor.size, gap, &occupied)
-                });
+                .unwrap_or_else(|| nearest_free(Point::default(), anchor.size, gap, &occupied));
             if anchor.app_id.is_none() {
                 occupied.push(Rectangle::new(anchor_position, anchor.size));
             }
@@ -137,8 +120,7 @@ impl State {
             });
 
             for item in group.iter().skip(1) {
-                let position =
-                    nearest_free(anchor_position, item.size, anchor.size, gap, &occupied);
+                let position = nearest_free(anchor_position, item.size, gap, &occupied);
                 occupied.push(Rectangle::new(position, item.size));
                 targets.push(Target {
                     id: item.id,
@@ -154,46 +136,56 @@ impl State {
 fn nearest_free(
     anchor: Point<f64, Logical>,
     size: Size<f64, Logical>,
-    anchor_size: Size<f64, Logical>,
     gap: f64,
     occupied: &[Rectangle<f64, Logical>],
 ) -> Point<f64, Logical> {
-    let step: Size<f64, Logical> = Size::from((
-        anchor_size.w.max(size.w) + gap,
-        anchor_size.h.max(size.h) + gap,
-    ));
-    for ring in 0.. {
-        let mut points = Vec::new();
-        for x in -ring..=ring {
-            points.push((x, -ring));
-            points.push((x, ring));
-        }
-        for y in (-ring + 1)..ring {
-            points.push((-ring, y));
-            points.push((ring, y));
-        }
-        points.sort_by(|a, b| {
-            let distance =
-                |(x, y): &(i32, i32)| (*x as f64 * step.w).powi(2) + (*y as f64 * step.h).powi(2);
-            distance(a).total_cmp(&distance(b)).then_with(|| a.cmp(b))
-        });
-        for (x, y) in points {
-            let position = anchor + Point::from((x as f64 * step.w, y as f64 * step.h));
-            if free(Rectangle::new(position, size), occupied) {
-                return position;
-            }
-        }
+    let mut xs = vec![anchor.x];
+    let mut ys = vec![anchor.y];
+    for rect in occupied {
+        xs.extend([
+            rect.loc.x - size.w - gap,
+            rect.loc.x,
+            rect.loc.x + rect.size.w - size.w,
+            rect.loc.x + rect.size.w + gap,
+        ]);
+        ys.extend([
+            rect.loc.y - size.h - gap,
+            rect.loc.y,
+            rect.loc.y + rect.size.h - size.h,
+            rect.loc.y + rect.size.h + gap,
+        ]);
     }
-    unreachable!()
+    let mut candidates: Vec<_> = xs
+        .into_iter()
+        .flat_map(|x| ys.iter().map(move |y| Point::from((x, *y))))
+        .filter(|position| free(Rectangle::new(*position, size), gap, occupied))
+        .collect();
+    candidates.sort_by(|a, b| {
+        let distance = |point: &Point<f64, Logical>| {
+            let delta = *point - anchor;
+            delta.x * delta.x + delta.y * delta.y
+        };
+        distance(a)
+            .total_cmp(&distance(b))
+            .then_with(|| a.x.total_cmp(&b.x))
+            .then_with(|| a.y.total_cmp(&b.y))
+    });
+    candidates[0]
 }
 
-fn free(rectangle: Rectangle<f64, Logical>, occupied: &[Rectangle<f64, Logical>]) -> bool {
-    occupied.iter().all(|other| !overlaps(rectangle, *other))
+fn free(
+    rectangle: Rectangle<f64, Logical>,
+    gap: f64,
+    occupied: &[Rectangle<f64, Logical>],
+) -> bool {
+    occupied
+        .iter()
+        .all(|other| !overlaps_with_gap(rectangle, *other, gap))
 }
 
-fn overlaps(a: Rectangle<f64, Logical>, b: Rectangle<f64, Logical>) -> bool {
-    a.loc.x < b.loc.x + b.size.w
-        && a.loc.x + a.size.w > b.loc.x
-        && a.loc.y < b.loc.y + b.size.h
-        && a.loc.y + a.size.h > b.loc.y
+fn overlaps_with_gap(a: Rectangle<f64, Logical>, b: Rectangle<f64, Logical>, gap: f64) -> bool {
+    a.loc.x < b.loc.x + b.size.w + gap
+        && a.loc.x + a.size.w + gap > b.loc.x
+        && a.loc.y < b.loc.y + b.size.h + gap
+        && a.loc.y + a.size.h + gap > b.loc.y
 }

@@ -15,7 +15,7 @@ stop_nested() {
 }
 
 start_nested() {
-    setsid target/debug/niri --config dev/nested.kdl &
+    setsid target/release/niri --config dev/nested.kdl &
     nested_pid=$!
 }
 
@@ -36,8 +36,8 @@ cleanup() {
 trap cleanup EXIT INT TERM
 trap restart_nested USR1
 
-cargo build --bin niri
-target/debug/niri validate --config dev/nested.kdl
+cargo build --release --bin niri
+target/release/niri validate --config dev/nested.kdl
 start_nested
 
 export NESTED_NIRI_RUNNER_PID=$$
@@ -50,7 +50,7 @@ watchexec --postpone \
     --watch Cargo.lock \
     --exts rs,toml,lock \
     --shell none \
-    -- bash -c 'cargo build --bin niri && kill -USR1 "$NESTED_NIRI_RUNNER_PID"' &
+    -- bash -c 'cargo build --release --bin niri && kill -USR1 "$NESTED_NIRI_RUNNER_PID"' &
 watcher_pid=$!
 
 while kill -0 "$watcher_pid" 2>/dev/null; do

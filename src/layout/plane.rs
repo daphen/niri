@@ -147,14 +147,10 @@ impl Plane {
         self.position = self.clamp(view.position);
     }
 
-    pub(super) fn update_bounds(
-        &mut self,
-        viewport: Size<f64, Logical>,
-        content: Rectangle<f64, Logical>,
-    ) {
+    pub(super) fn update_bounds(&mut self, targets: Rectangle<f64, Logical>) {
         self.bounds = PlaneBounds {
-            min: content.loc - viewport.to_point(),
-            max: content.loc + content.size.to_point(),
+            min: targets.loc,
+            max: targets.loc + targets.size.to_point(),
         };
         self.position = self.clamp(self.position);
     }

@@ -3749,11 +3749,11 @@ fn output(layout: &Layout<TestWindow>, id: usize) -> Option<Output> {
         .cloned()
 }
 
-fn window_hit_center(
+fn window_hit_bounds(
     layout: &Layout<TestWindow>,
     output: &Output,
     window: usize,
-) -> Option<Point<f64, Logical>> {
+) -> Option<(i32, i32, i32, i32)> {
     let mut bounds: Option<(i32, i32, i32, i32)> = None;
     for y in (5..720).step_by(10) {
         for x in (5..1280).step_by(10) {
@@ -3768,9 +3768,60 @@ fn window_hit_center(
             }
         }
     }
-    bounds.map(|(min_x, min_y, max_x, max_y)| {
+    bounds
+}
+
+fn window_hit_center(
+    layout: &Layout<TestWindow>,
+    output: &Output,
+    window: usize,
+) -> Option<Point<f64, Logical>> {
+    window_hit_bounds(layout, output, window).map(|(min_x, min_y, max_x, max_y)| {
         Point::from((f64::from(min_x + max_x) / 2., f64::from(min_y + max_y) / 2.))
     })
+}
+
+fn assert_window_centered(layout: &Layout<TestWindow>, output: &Output, window: usize) {
+    let (min_x, min_y, max_x, max_y) = window_hit_bounds(layout, output, window).unwrap();
+    let center: Point<f64, Logical> =
+        Point::from((f64::from(min_x + max_x) / 2., f64::from(min_y + max_y) / 2.));
+    assert!((center.x - 640.).abs() <= 10., "x center was {}", center.x);
+    assert!((center.y - 360.).abs() <= 10., "y center was {}", center.y);
+}
+
+fn assert_focus_travel_visible(layout: &mut Layout<TestWindow>, output: &Output, window: usize) {
+    let mut previous_distance = f64::INFINITY;
+    for _ in 0..20 {
+        Op::AdvanceAnimations { msec_delta: 16 }.apply(layout);
+        layout.update_render_elements(Some(output));
+        let center = window_hit_center(layout, output, window).unwrap();
+        let distance = (center.x - 640.).hypot(center.y - 360.);
+        assert!(distance <= previous_distance + 1.);
+        previous_distance = distance;
+    }
+    Op::CompleteAnimations.apply(layout);
+    assert_window_centered(layout, output, window);
+}
+
+#[test]
+fn dnd_move_cleans_empty_source_workspace_after_switch_animation() {
+    check_ops([
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddOutput(4),
+        Op::DndUpdate {
+            output_idx: 4,
+            px: 0.,
+            py: 0.,
+        },
+        Op::MoveWindowToWorkspace {
+            window_id: None,
+            workspace_idx: 1,
+        },
+        Op::AdvanceAnimations { msec_delta: -1000 },
+        Op::AdvanceAnimations { msec_delta: 1000 },
+    ]);
 }
 
 #[test]
@@ -3799,16 +3850,13 @@ fn plane_pan_after_pinch_with_stationary_axis_does_not_animate_nan() {
 
 #[test]
 fn plane_pan_updates_both_axes() {
-    let windows = (1..=2).map(|id| {
+    let windows = (1..=6).map(|id| {
         let mut params = TestWindowParams::new(id);
         params.app_id = Some("alpha".into());
         Op::AddWindow { params }
     });
     let mut layout = check_ops(std::iter::once(Op::AddOutput(1)).chain(windows));
     layout.refresh(true);
-    layout.activate_window(&2);
-    layout.move_down();
-    Op::CompleteAnimations.apply(&mut layout);
     layout.activate_window(&1);
     Op::CompleteAnimations.apply(&mut layout);
     let output = output(&layout, 1).unwrap();
@@ -3818,7 +3866,22 @@ fn plane_pan_updates_both_axes() {
     Op::CompleteAnimations.apply(&mut layout);
     layout.plane_pan_end(&output, Point::default(), start);
 
-    assert_eq!(layout.focus().unwrap().id(), &2);
+    assert_eq!(layout.focus().unwrap().id(), &6);
+}
+
+#[test]
+fn plane_pan_cannot_leave_finite_content() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+    ]);
+    let output = output(&layout, 1).unwrap();
+    let start = layout.plane_pan_begin(&output).unwrap();
+    layout.plane_pan_update(&output, Point::from((10_000., 10_000.)), start, 1.);
+    Op::CompleteAnimations.apply(&mut layout);
+    assert!(window_hit_center(&layout, &output, 1).is_some());
 }
 
 #[test]
@@ -3928,6 +3991,264 @@ fn app_centered_placement_is_two_dimensional() {
     layout.activate_window(&2);
     layout.focus_right();
     assert_eq!(layout.focus().unwrap().id(), &3);
+}
+
+#[test]
+fn directional_navigation_prioritizes_the_nearest_row() {
+    let rect = |x, y| Rectangle::new(Point::from((x, y)), Size::from((100., 100.)));
+    let items = [
+        (1, rect(0., 0.), 1),
+        (2, rect(900., 150.), 2),
+        (3, rect(0., 400.), 3),
+    ];
+    assert_eq!(
+        super::plane::navigation::nearest(&1, super::plane::navigation::Direction::Down, &items),
+        Some(2)
+    );
+}
+
+fn stacked_move_fixture() -> Layout<TestWindow> {
+    let add = |id| Op::AddWindow {
+        params: TestWindowParams::new(id),
+    };
+    let windows = (1..=4).map(add);
+    let mut layout = check_ops(std::iter::once(Op::AddOutput(1)).chain(windows));
+    Op::ConsumeOrExpelWindowLeft { id: None }.apply(&mut layout);
+    add(5).apply(&mut layout);
+    Op::ConsumeOrExpelWindowLeft { id: None }.apply(&mut layout);
+    for (id, width, height) in [(2, 260, 180), (4, 340, 220)] {
+        layout.set_window_width(Some(&id), SizeChange::SetFixed(width));
+        layout.set_window_height(Some(&id), SizeChange::SetFixed(height));
+        Op::Communicate(id).apply(&mut layout);
+    }
+    Op::CompleteAnimations.apply(&mut layout);
+    layout
+}
+
+#[test]
+fn directional_move_extracts_only_the_focused_stacked_tile() {
+    let mut layout = stacked_move_fixture();
+    let size = |layout: &Layout<TestWindow>| {
+        layout
+            .monitors()
+            .next()
+            .unwrap()
+            .active_workspace_ref()
+            .scrolling()
+            .plane_snapshots()
+            .into_iter()
+            .find(|item| item.id == 4)
+            .unwrap()
+            .rectangle
+            .size
+    };
+    let before = size(&layout);
+    layout.activate_window(&4);
+    layout.move_down();
+    assert_eq!(
+        layout
+            .monitors()
+            .next()
+            .unwrap()
+            .active_workspace_ref()
+            .scrolling()
+            .plane_tile_indices(&4)
+            .unwrap()
+            .1,
+        2
+    );
+    layout.move_left();
+    assert_eq!(size(&layout), before);
+    let scrolling = layout
+        .monitors()
+        .next()
+        .unwrap()
+        .active_workspace_ref()
+        .scrolling();
+    let (moved, _) = scrolling.plane_tile_indices(&4).unwrap();
+    assert_ne!(moved, scrolling.plane_tile_indices(&3).unwrap().0);
+    assert_eq!(
+        scrolling.plane_tile_indices(&3).unwrap().0,
+        scrolling.plane_tile_indices(&5).unwrap().0
+    );
+}
+
+#[test]
+fn directional_move_collapses_inward_and_pushes_with_native_animation() {
+    let mut layout = stacked_move_fixture();
+    layout.activate_window(&2);
+    layout.move_right();
+    Op::Communicate(2).apply(&mut layout);
+    layout.refresh(true);
+    let scrolling = layout
+        .monitors()
+        .next()
+        .unwrap()
+        .active_workspace_ref()
+        .scrolling();
+    let column = |id| scrolling.plane_tile_indices(&id).unwrap().0;
+    assert_eq!((column(1), column(3), column(2)), (0, 1, 1));
+    assert_eq!(
+        scrolling
+            .plane_snapshots()
+            .into_iter()
+            .find(|item| item.id == 2)
+            .unwrap()
+            .rectangle
+            .size,
+        Size::from((260., 180.))
+    );
+    assert!(scrolling
+        .tiles()
+        .any(|tile| tile.window().id() == &3 && tile.render_offset() != Point::default()));
+}
+
+#[test]
+fn app_cluster_packs_around_anchor_on_both_axes() {
+    let windows = (1..=9).map(|id| {
+        let mut params = TestWindowParams::new(id);
+        params.app_id = Some("alpha".into());
+        Op::AddWindow { params }
+    });
+    let mut layout = check_ops(std::iter::once(Op::AddOutput(1)).chain(windows));
+    layout.refresh(true);
+
+    layout.activate_window(&1);
+    layout.focus_down();
+    assert_ne!(layout.focus().unwrap().id(), &1);
+
+    layout.activate_window(&1);
+    layout.focus_up();
+    assert_ne!(layout.focus().unwrap().id(), &1);
+}
+
+#[test]
+fn focused_tiled_windows_center_across_sizes_rows_and_pan_release() {
+    let mut options = Options::default();
+    options.layout.center_focused_column = CenterFocusedColumn::Always;
+    options.layout.border.off = false;
+    options.layout.border.width = 8.;
+    options.layout.focus_ring.off = false;
+    options.layout.focus_ring.width = 6.;
+    let mut layout = check_ops_with_options(options, [Op::AddOutput(1)]);
+    let output = output(&layout, 1).unwrap();
+    for (id, width, height) in [
+        (1, 320, 240),
+        (2, 520, 360),
+        (3, 240, 480),
+        (4, 400, 260),
+        (5, 280, 420),
+        (6, 460, 300),
+        (7, 360, 500),
+        (8, 300, 280),
+        (9, 440, 400),
+    ] {
+        let mut params = TestWindowParams::new(id);
+        params.app_id = Some("alpha".into());
+        layout.add_window(
+            TestWindow::new(params),
+            AddWindowTarget::Auto,
+            Some(niri_config::PresetSize::Fixed(width)),
+            Some(niri_config::PresetSize::Fixed(height)),
+            false,
+            false,
+            ActivateWindow::Yes,
+        );
+        layout.refresh(true);
+        Op::Communicate(id).apply(&mut layout);
+        layout.refresh(true);
+        Op::CompleteAnimations.apply(&mut layout);
+        assert_eq!(layout.focus().unwrap().id(), &id);
+        assert_window_centered(&layout, &output, id);
+    }
+
+    layout.activate_window(&1);
+    Op::CompleteAnimations.apply(&mut layout);
+    assert_window_centered(&layout, &output, 1);
+    layout.focus_down();
+    let focused = *layout.focus().unwrap().id();
+    assert_ne!(focused, 1);
+    assert_focus_travel_visible(&mut layout, &output, focused);
+    layout.focus_up();
+    let top = *layout.focus().unwrap().id();
+    assert_ne!(top, focused);
+    assert_focus_travel_visible(&mut layout, &output, top);
+
+    let mut edge_windows = Vec::new();
+    for delta in [
+        Point::from((10_000., 0.)),
+        Point::from((-10_000., 0.)),
+        Point::from((0., 10_000.)),
+        Point::from((0., -10_000.)),
+    ] {
+        let start = layout.plane_pan_begin(&output).unwrap();
+        layout.plane_pan_update(&output, delta, start, 1.);
+        Op::CompleteAnimations.apply(&mut layout);
+        layout.plane_pan_end(&output, Point::default(), start);
+        Op::CompleteAnimations.apply(&mut layout);
+        let focused = *layout.focus().unwrap().id();
+        assert_window_centered(&layout, &output, focused);
+        let size = layout
+            .windows()
+            .find(|(_, window)| window.id() == &focused)
+            .unwrap()
+            .1
+            .requested_size()
+            .unwrap();
+        assert!(size.w + 28 < 1280 && size.h + 28 < 720);
+        edge_windows.push(focused);
+    }
+    edge_windows.sort_unstable();
+    edge_windows.dedup();
+    assert_eq!(edge_windows.len(), 4);
+}
+
+#[test]
+fn plane_focus_centering_respects_config_modes() {
+    for mode in [
+        CenterFocusedColumn::Never,
+        CenterFocusedColumn::OnOverflow,
+        CenterFocusedColumn::Always,
+    ] {
+        let options = Options {
+            layout: niri_config::Layout {
+                center_focused_column: mode,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut layout = check_ops_with_options(options, [Op::AddOutput(1)]);
+        let output = output(&layout, 1).unwrap();
+        for id in 1..=3 {
+            let mut params = TestWindowParams::new(id);
+            params.app_id = Some(format!("app-{id}"));
+            layout.add_window(
+                TestWindow::new(params),
+                AddWindowTarget::Auto,
+                Some(niri_config::PresetSize::Fixed(200)),
+                Some(niri_config::PresetSize::Fixed(200)),
+                false,
+                false,
+                ActivateWindow::Yes,
+            );
+            layout.refresh(true);
+            Op::Communicate(id).apply(&mut layout);
+            layout.refresh(true);
+        }
+        layout.activate_window(&3);
+        Op::CompleteAnimations.apply(&mut layout);
+        assert_eq!(layout.focus().unwrap().id(), &3);
+        if mode == CenterFocusedColumn::Always {
+            assert_window_centered(&layout, &output, 3);
+        }
+
+        let start = layout.plane_pan_begin(&output).unwrap();
+        layout.plane_pan_update(&output, Point::from((-10_000., 0.)), start, 1.);
+        Op::CompleteAnimations.apply(&mut layout);
+        layout.plane_pan_end(&output, Point::default(), start);
+        Op::CompleteAnimations.apply(&mut layout);
+        assert_window_centered(&layout, &output, *layout.focus().unwrap().id());
+    }
 }
 
 #[test]

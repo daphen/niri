@@ -1662,7 +1662,7 @@ impl<W: LayoutElement> Workspace<W> {
         &self,
         ctx: RenderCtx<R>,
         xray_pos: XrayPos,
-        plane_view_x: f64,
+        plane_view: Rectangle<f64, Logical>,
         focus_ring: bool,
         layer: RenderLayer,
         push: &mut dyn FnMut(WorkspaceRenderElement<R>),
@@ -1671,7 +1671,7 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.render(
             ctx,
             xray_pos,
-            plane_view_x,
+            plane_view,
             scrolling_focus_ring,
             layer,
             &mut |elem| push(elem.into()),
