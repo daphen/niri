@@ -445,9 +445,13 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             || !self.closing_windows.is_empty()
     }
 
-    pub fn update_render_elements(&mut self, is_active: bool, layer: RenderLayer) {
+    pub fn update_render_elements(
+        &mut self,
+        is_active: bool,
+        layer: RenderLayer,
+        viewport: Rectangle<f64, Logical>,
+    ) {
         let view_pos = self.spatial_view_pos();
-        let view_size = self.view_size;
         let active_idx = self.active_column_idx;
         for (col_idx, (col, data)) in zip(&mut self.columns, &self.data).enumerate() {
             // Skip columns belonging to a different render layer.
@@ -456,8 +460,8 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             }
 
             let is_active = is_active && col_idx == active_idx;
-            let col_pos = view_pos - data.position - col.render_offset();
-            let view_rect = Rectangle::new(col_pos, view_size);
+            let col_pos = view_pos - data.position - col.render_offset() + viewport.loc;
+            let view_rect = Rectangle::new(col_pos, viewport.size);
             col.update_render_elements(is_active, view_rect);
         }
     }

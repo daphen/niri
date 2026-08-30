@@ -375,14 +375,21 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.are_transitions_ongoing() || self.floating.are_transitions_ongoing()
     }
 
-    pub fn update_render_elements(&mut self, is_active: bool, layer: RenderLayer) {
-        self.scrolling
-            .update_render_elements(is_active && !self.floating_is_active.get(), layer);
+    pub fn update_render_elements(
+        &mut self,
+        is_active: bool,
+        layer: RenderLayer,
+        viewport: Rectangle<f64, Logical>,
+    ) {
+        self.scrolling.update_render_elements(
+            is_active && !self.floating_is_active.get(),
+            layer,
+            viewport,
+        );
 
-        let view_rect = Rectangle::from_size(self.view_size);
         self.floating.update_render_elements(
             is_active && self.floating_is_active.get(),
-            view_rect,
+            viewport,
             layer,
         );
 

@@ -280,6 +280,22 @@ impl From<&super::OverviewProgress> for OverviewProgress {
     }
 }
 
+fn workspace_viewport(
+    overview: bool,
+    zoom: f64,
+    view_size: Size<f64, Logical>,
+    geo: Rectangle<f64, Logical>,
+) -> Rectangle<f64, Logical> {
+    if overview {
+        Rectangle::new(
+            (Point::default() - geo.loc).downscale(zoom),
+            view_size.downscale(zoom),
+        )
+    } else {
+        Rectangle::from_size(view_size)
+    }
+}
+
 impl<W: LayoutElement> Monitor<W> {
     pub fn new(
         output: Output,
@@ -1083,12 +1099,21 @@ impl<W: LayoutElement> Monitor<W> {
             .as_ref()
             .and_then(|hint| hint.workspace.existing_id());
 
+        let default_viewport = Rectangle::from_size(self.view_size);
         for ws in &mut self.workspaces {
-            ws.update_render_elements(is_active, RenderLayer::MovingBetweenWorkspaces);
+            ws.update_render_elements(
+                is_active,
+                RenderLayer::MovingBetweenWorkspaces,
+                default_viewport,
+            );
         }
 
+        let overview = self.overview_progress.is_some();
+        let zoom = self.overview_zoom();
+        let view_size = self.view_size;
         for (ws, geo) in self.workspaces_with_render_geo_mut(true) {
-            ws.update_render_elements(is_active, RenderLayer::Normal);
+            let viewport = workspace_viewport(overview, zoom, view_size, geo);
+            ws.update_render_elements(is_active, RenderLayer::Normal, viewport);
 
             if Some(ws.id()) == insert_hint_ws_id {
                 insert_hint_ws_geo = Some(geo);
@@ -1519,6 +1544,19 @@ impl<W: LayoutElement> Monitor<W> {
             .filter(|_| self.overview_progress.is_none())
     }
 
+    pub fn workspace_viewport(&self, geo: Rectangle<f64, Logical>) -> Rectangle<f64, Logical> {
+        workspace_viewport(
+            self.overview_progress.is_some(),
+            self.overview_zoom(),
+            self.view_size,
+            geo,
+        )
+    }
+
+    pub fn clips_workspace_content(&self) -> bool {
+        self.workspace_switch.is_some() && self.overview_progress.is_none()
+    }
+
     pub fn workspaces_with_render_geo_idx(
         &self,
     ) -> impl Iterator<Item = ((usize, &Workspace<W>), Rectangle<f64, Logical>)> {
@@ -1730,18 +1768,17 @@ impl<W: LayoutElement> Monitor<W> {
             // FIXME: for cull=true, it might be better visually to crop to a workspace-high region
             // anchored to the window/column as it moves between workspaces, to prevent overflowing
             // windows from appearing and disappearing.
-            let crop_bounds =
-                if cull && (self.workspace_switch.is_some() || self.overview_progress.is_some()) {
-                    Rectangle::new(
-                        Point::from((-i32::MAX / 2, 0)),
-                        Size::from((i32::MAX, height)),
-                    )
-                } else {
-                    Rectangle::new(
-                        Point::from((-i32::MAX / 2, -i32::MAX / 2)),
-                        Size::from((i32::MAX, i32::MAX)),
-                    )
-                };
+            let crop_bounds = if cull && self.clips_workspace_content() {
+                Rectangle::new(
+                    Point::from((-i32::MAX / 2, 0)),
+                    Size::from((i32::MAX, height)),
+                )
+            } else {
+                Rectangle::new(
+                    Point::from((-i32::MAX / 2, -i32::MAX / 2)),
+                    Size::from((i32::MAX, i32::MAX)),
+                )
+            };
 
             for (ws, geo) in self.workspaces_with_render_geo_cull(cull) {
                 // Macro instead of closure because ws and insert hint have different elem types.

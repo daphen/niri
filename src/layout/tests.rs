@@ -3232,14 +3232,27 @@ fn overview_hides_workspace_chrome_but_keeps_tiled_windows() {
     Op::CompleteAnimations.apply(&mut layout);
     let monitor = layout.monitors().next().unwrap();
     assert_eq!(monitor.workspaces_with_render_geo_for_chrome().count(), 0);
-    assert!(monitor
+    assert!(!monitor.clips_workspace_content());
+    let (workspace, geo) = monitor
         .workspaces_with_render_geo()
-        .any(|(workspace, _)| workspace.scrolling().tiles().count() > 0));
+        .find(|(workspace, _)| workspace.scrolling().tiles().count() > 0)
+        .unwrap();
+    assert!(workspace.scrolling().tiles().count() > 0);
+    let viewport = monitor.workspace_viewport(geo);
+    assert_eq!(viewport.size, monitor.view_size().downscale(0.5));
+    assert!(viewport.loc.x < 0.);
+    assert!(viewport.loc.y < 0.);
 
     layout.toggle_overview();
     assert_eq!(visible_chrome(&layout), 0);
     Op::CompleteAnimations.apply(&mut layout);
     assert!(visible_chrome(&layout) > 0);
+    let monitor = layout.monitors().next().unwrap();
+    let (_, geo) = monitor.workspaces_with_render_geo().next().unwrap();
+    assert_eq!(
+        monitor.workspace_viewport(geo),
+        Rectangle::from_size(monitor.view_size())
+    );
 }
 
 #[test]
