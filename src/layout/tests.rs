@@ -3156,6 +3156,124 @@ fn spatial_pointer_hit_activates_off_origin_window_with_xy_camera() {
     assert_eq!(*layout.focus().unwrap().id(), target);
 }
 
+fn spatial_overview_pan_fixture() -> Layout<TestWindow> {
+    let mut layout = check_ops([Op::AddOutput(1)]);
+    for (id, width, height) in [
+        (1, 900, 600),
+        (2, 700, 500),
+        (3, 1100, 650),
+        (4, 800, 450),
+        (5, 1000, 700),
+    ] {
+        Op::AddWindow {
+            params: TestWindowParams::new(id),
+        }
+        .apply(&mut layout);
+        layout.set_window_width(Some(&id), SizeChange::SetFixed(width));
+        layout.set_window_height(Some(&id), SizeChange::SetFixed(height));
+        Op::Communicate(id).apply(&mut layout);
+        layout.refresh(true);
+    }
+    Op::CompleteAnimations.apply(&mut layout);
+    layout.activate_window(&1);
+    Op::CompleteAnimations.apply(&mut layout);
+    layout
+}
+
+#[test]
+fn overview_toggle_preserves_spatial_camera_and_output_background() {
+    let mut layout = spatial_overview_pan_fixture();
+    let output = layout.outputs().next().unwrap().clone();
+    layout.view_offset_gesture_begin(&output, None, true);
+    layout.view_offset_gesture_update(Point::from((240., 160.)), Duration::from_millis(16), true);
+    layout.view_offset_gesture_end(Some(true));
+    Op::CompleteAnimations.apply(&mut layout);
+
+    let camera = rendered_rectangles(&layout);
+    let background = layout
+        .active_workspace()
+        .unwrap()
+        .render_background()
+        .geometry(Scale::from(1.));
+    layout.toggle_overview();
+    Op::CompleteAnimations.apply(&mut layout);
+    assert_eq!(layout.overview_zoom(), 0.5);
+    assert_eq!(rendered_rectangles(&layout), camera);
+    assert_eq!(
+        layout
+            .active_workspace()
+            .unwrap()
+            .render_background()
+            .geometry(Scale::from(1.)),
+        background
+    );
+
+    layout.toggle_overview();
+    Op::CompleteAnimations.apply(&mut layout);
+    assert_eq!(layout.overview_zoom(), 1.);
+    assert_eq!(rendered_rectangles(&layout), camera);
+}
+
+#[test]
+fn overview_three_finger_pan_reuses_xy_camera_with_screen_space_compensation() {
+    let delta = Point::from((180., 120.));
+    let timestamp = Duration::from_millis(16);
+    let mut normal = spatial_overview_pan_fixture();
+    let normal_output = normal.outputs().next().unwrap().clone();
+    let normal_before = rendered_rectangles(&normal)[&1].loc;
+    normal.view_offset_gesture_begin(&normal_output, None, true);
+    normal.view_offset_gesture_update(delta, timestamp, true);
+    let normal_delta = rendered_rectangles(&normal)[&1].loc - normal_before;
+
+    let mut overview = spatial_overview_pan_fixture();
+    overview.toggle_overview();
+    Op::CompleteAnimations.apply(&mut overview);
+    let output = overview.outputs().next().unwrap().clone();
+    let background = overview
+        .active_workspace()
+        .unwrap()
+        .render_background()
+        .geometry(Scale::from(1.));
+    let before = rendered_rectangles(&overview)[&1].loc;
+    overview.view_offset_gesture_begin(&output, None, true);
+    overview.view_offset_gesture_update(delta, timestamp, true);
+    let overview_delta = rendered_rectangles(&overview)[&1].loc - before;
+    assert!((overview_delta.x * overview.overview_zoom() - normal_delta.x).abs() < 0.01);
+    assert!((overview_delta.y * overview.overview_zoom() - normal_delta.y).abs() < 0.01);
+    assert_ne!(overview_delta.x, 0.);
+    assert_ne!(overview_delta.y, 0.);
+    assert_eq!(
+        overview
+            .active_workspace()
+            .unwrap()
+            .render_background()
+            .geometry(Scale::from(1.)),
+        background
+    );
+
+    overview.clock.set_unadjusted(Duration::from_millis(1000));
+    overview.view_offset_gesture_update(Point::from((0., 0.)), Duration::from_millis(1000), true);
+    let before_release = rendered_rectangles(&overview);
+    let viewport_center = Point::from((640., 360.));
+    let expected = before_release
+        .iter()
+        .min_by(|(_, a), (_, b)| {
+            let a = a.loc + a.size.to_point().downscale(2.) - viewport_center;
+            let b = b.loc + b.size.to_point().downscale(2.) - viewport_center;
+            (a.x * a.x + a.y * a.y).total_cmp(&(b.x * b.x + b.y * b.y))
+        })
+        .map(|(id, _)| *id)
+        .unwrap();
+    overview.view_offset_gesture_end(Some(true));
+    assert_eq!(*overview.focus().unwrap().id(), expected);
+    assert_eq!(rendered_rectangles(&overview), before_release);
+    Op::CompleteAnimations.apply(&mut overview);
+    let focused = rendered_rectangles(&overview)[&expected];
+    let center = focused.loc + focused.size.to_point().downscale(2.);
+    assert!((center.x - viewport_center.x).abs() < 1.);
+    assert!((center.y - viewport_center.y).abs() < 1.);
+}
+
 #[test]
 fn touchpad_pan_updates_both_camera_axes() {
     let mut layout = check_ops([
