@@ -3024,6 +3024,101 @@ fn spatial_move_preserves_mixed_window_sizes() {
     }
 }
 
+fn spatial_horizontal_fixture(widths: &[i32]) -> Layout<TestWindow> {
+    let mut layout = check_ops([Op::AddOutput(1)]);
+    for (idx, width) in widths.iter().enumerate() {
+        let id = idx + 1;
+        Op::AddWindow {
+            params: TestWindowParams::new(id),
+        }
+        .apply(&mut layout);
+        layout.set_window_width(Some(&id), SizeChange::SetFixed(*width));
+        layout.set_window_height(Some(&id), SizeChange::SetFixed(240));
+        Op::Communicate(id).apply(&mut layout);
+        layout.refresh(true);
+    }
+    Op::CompleteAnimations.apply(&mut layout);
+    layout
+}
+
+#[test]
+fn spatial_horizontal_move_is_mirrored_for_two_variable_width_windows() {
+    let mut move_right = spatial_horizontal_fixture(&[320, 540]);
+    let mut move_left = spatial_horizontal_fixture(&[320, 540]);
+    let rendered_right_before = rendered_rectangles(&move_right)[&1];
+    let rendered_left_before = rendered_rectangles(&move_left)[&2];
+
+    move_right.activate_window(&1);
+    move_right.move_right();
+    move_left.activate_window(&2);
+    move_left.move_left();
+
+    assert_eq!(*move_right.focus().unwrap().id(), 1);
+    assert_eq!(*move_left.focus().unwrap().id(), 2);
+    assert_eq!(rendered_rectangles(&move_right)[&1], rendered_right_before);
+    assert_eq!(rendered_rectangles(&move_left)[&2], rendered_left_before);
+    assert!(move_right.are_animations_ongoing(None));
+    assert!(move_left.are_animations_ongoing(None));
+
+    Op::CompleteAnimations.apply(&mut move_right);
+    Op::CompleteAnimations.apply(&mut move_left);
+    let right = ipc_rectangles(&move_right);
+    let left = ipc_rectangles(&move_left);
+    let translation = left[&1].loc.x - right[&1].loc.x;
+    for id in [1, 2] {
+        assert_eq!(right[&id].size, left[&id].size);
+        assert_eq!(right[&id].loc.x + translation, left[&id].loc.x);
+        assert_eq!(right[&id].loc.y, left[&id].loc.y);
+    }
+}
+
+#[test]
+fn spatial_horizontal_move_inserts_and_pushes_symmetrically_in_three_window_row() {
+    let gap = Options::default().layout.gaps;
+    let mut move_right = spatial_horizontal_fixture(&[300, 500, 300]);
+    let mut move_left = spatial_horizontal_fixture(&[300, 500, 300]);
+
+    move_right.activate_window(&1);
+    move_right.move_right();
+    move_left.activate_window(&3);
+    move_left.move_left();
+    Op::CompleteAnimations.apply(&mut move_right);
+    Op::CompleteAnimations.apply(&mut move_left);
+
+    let right = ipc_rectangles(&move_right);
+    assert_eq!(right[&1].loc.x, right[&2].loc.x + right[&2].size.w + gap);
+    assert_eq!(right[&3].loc.x, right[&1].loc.x + right[&1].size.w + gap);
+
+    let left = ipc_rectangles(&move_left);
+    assert_eq!(left[&3].loc.x, left[&1].loc.x + left[&1].size.w + gap);
+    assert_eq!(left[&2].loc.x, left[&3].loc.x + left[&3].size.w + gap);
+
+    let right_min = right
+        .values()
+        .map(|rect| rect.loc.x)
+        .fold(f64::MAX, f64::min);
+    let right_max = right
+        .values()
+        .map(|rect| rect.loc.x + rect.size.w)
+        .fold(f64::MIN, f64::max);
+    let left_min = left
+        .values()
+        .map(|rect| rect.loc.x)
+        .fold(f64::MAX, f64::min);
+    let left_max = left
+        .values()
+        .map(|rect| rect.loc.x + rect.size.w)
+        .fold(f64::MIN, f64::max);
+    assert_eq!(right_max - right_min, left_max - left_min);
+    for (right_id, left_id) in [(1, 3), (2, 2), (3, 1)] {
+        assert_eq!(right[&right_id].size, left[&left_id].size);
+        assert_eq!(
+            right[&right_id].loc.x - right_min,
+            left_max - (left[&left_id].loc.x + left[&left_id].size.w)
+        );
+    }
+}
+
 #[test]
 fn spatial_middle_stack_move_preserves_rendered_position() {
     let mut layout = spatial_stack_fixture();

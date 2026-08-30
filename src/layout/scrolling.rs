@@ -2112,8 +2112,9 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             || self.collision_free_slot(&current, current_rectangle, direction),
             |(_, position, _)| *position,
         );
-        if source_was_singleton {
-            if let Some((target, _, _)) = &target {
+        let right_target_rectangle = source_was_singleton
+            .then(|| {
+                let (target, _, _) = target.as_ref()?;
                 let rectangle = tiles
                     .iter()
                     .find_map(|(id, rectangle, _)| (id == target).then_some(*rectangle))
@@ -2121,10 +2122,12 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 let shares_source_row = rectangle.loc.y
                     < current_rectangle.loc.y + current_rectangle.size.h
                     && current_rectangle.loc.y < rectangle.loc.y + rectangle.size.h;
-                if shares_source_row && target_position.x > current_rectangle.loc.x {
-                    target_position.x -= current_rectangle.size.w + self.options.layout.gaps;
-                }
-            }
+                (shares_source_row && target_position.x > current_rectangle.loc.x)
+                    .then_some(rectangle)
+            })
+            .flatten();
+        if let Some(rectangle) = right_target_rectangle {
+            target_position.x += rectangle.size.w - current_rectangle.size.w;
         }
         let target_column = target.as_ref().map_or_else(
             || match direction {
@@ -2147,6 +2150,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 source_column,
                 Some(self.options.animations.window_movement.0),
             );
+            let target_column = target_column + usize::from(right_target_rectangle.is_some());
             let target_column = target_column - usize::from(source_column < target_column);
             self.add_column(
                 Some(target_column),
