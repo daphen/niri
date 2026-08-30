@@ -68,6 +68,7 @@ spawn-at-startup "sh" "dev/seed-fixture.sh"
 
 binds {
     Super+Return { spawn "/nix/store/fjks97fnvkfgf0qjpdndbmfz3gk7awya-foot-1.27.0/bin/foot" "-a" "fixture-plane" "-T" "Spawned" "sleep" "infinity"; }
+    Alt+Tab repeat=false { toggle-overview; }
 
     Super+H { focus-column-left; }
     Super+J { focus-window-down; }
