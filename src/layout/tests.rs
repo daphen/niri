@@ -3215,6 +3215,34 @@ fn overview_toggle_preserves_spatial_camera_and_output_background() {
 }
 
 #[test]
+fn overview_hides_workspace_chrome_but_keeps_tiled_windows() {
+    let mut layout = spatial_overview_pan_fixture();
+    let visible_chrome = |layout: &Layout<TestWindow>| {
+        layout
+            .monitors()
+            .next()
+            .unwrap()
+            .workspaces_with_render_geo_for_chrome()
+            .count()
+    };
+    assert!(visible_chrome(&layout) > 0);
+
+    layout.toggle_overview();
+    assert_eq!(visible_chrome(&layout), 0);
+    Op::CompleteAnimations.apply(&mut layout);
+    let monitor = layout.monitors().next().unwrap();
+    assert_eq!(monitor.workspaces_with_render_geo_for_chrome().count(), 0);
+    assert!(monitor
+        .workspaces_with_render_geo()
+        .any(|(workspace, _)| workspace.scrolling().tiles().count() > 0));
+
+    layout.toggle_overview();
+    assert_eq!(visible_chrome(&layout), 0);
+    Op::CompleteAnimations.apply(&mut layout);
+    assert!(visible_chrome(&layout) > 0);
+}
+
+#[test]
 fn overview_three_finger_pan_reuses_xy_camera_with_screen_space_compensation() {
     let delta = Point::from((180., 120.));
     let timestamp = Duration::from_millis(16);

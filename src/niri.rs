@@ -4144,7 +4144,7 @@ impl Niri {
 
                 state.xray.workspaces.clear();
                 let mon = self.layout.monitor_for_output(out).unwrap();
-                for (ws, geo) in mon.workspaces_with_render_geo() {
+                for (ws, geo) in mon.workspaces_with_render_geo_for_chrome() {
                     let bg_color = ws.render_background().color();
                     state.xray.workspaces.push((geo, bg_color));
                 }
@@ -4436,7 +4436,7 @@ impl Niri {
                 }};
             }
 
-            for (ws, geo) in mon.workspaces_with_render_geo() {
+            for (ws, geo) in mon.workspaces_with_render_geo_for_chrome() {
                 let ns = Some(ws.id().get() as usize);
                 let xray_pos = XrayPos::new(geo.loc, zoom);
                 push_popups_from_layer!(Layer::Bottom, ns, xray_pos, process!(geo));
@@ -4445,7 +4445,7 @@ impl Niri {
 
             mon.render_workspaces(ctx.r(), focus_ring, &mut |elem| push(elem.into()));
 
-            for (ws, geo) in mon.workspaces_with_render_geo() {
+            for (ws, geo) in mon.workspaces_with_render_geo_for_chrome() {
                 // The render element namespace. This will be set to the workspace index for
                 // elements duplicated across workspaces (i.e. background and bottom layers) in
                 // order to have their non-xray framebuffer effects separated from each other.
@@ -4462,8 +4462,6 @@ impl Niri {
                 process!(geo)(ws.render_background());
             }
         }
-
-        mon.render_workspace_shadows(ctx.renderer, &mut |elem| push(elem.into()));
 
         // Then the backdrop.
         push_popups_from_layer!(Layer::Background, true);

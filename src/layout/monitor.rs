@@ -23,7 +23,6 @@ use crate::input::swipe_tracker::SwipeTracker;
 use crate::layout::RenderLayer;
 use crate::niri_render_elements;
 use crate::render_helpers::renderer::NiriRenderer;
-use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::solid_color::SolidColorRenderElement;
 use crate::render_helpers::xray::XrayPos;
 use crate::render_helpers::RenderCtx;
@@ -189,7 +188,6 @@ niri_render_elements! {
         Workspace = CropRenderElement<WorkspaceRenderElement<R>>,
         InsertHint = CropRenderElement<InsertHintRenderElement>,
         UncroppedInsertHint = InsertHintRenderElement,
-        Shadow = ShadowRenderElement,
         SolidColor = SolidColorRenderElement,
     }
 }
@@ -267,13 +265,6 @@ impl OverviewProgress {
     pub fn value(&self) -> f64 {
         match self {
             OverviewProgress::Animation(anim) => anim.value(),
-            OverviewProgress::Value(v) => *v,
-        }
-    }
-
-    pub fn clamped_value(&self) -> f64 {
-        match self {
-            OverviewProgress::Animation(anim) => anim.clamped_value(),
             OverviewProgress::Value(v) => *v,
         }
     }
@@ -1521,6 +1512,13 @@ impl<W: LayoutElement> Monitor<W> {
         self.workspaces_with_render_geo_cull(true)
     }
 
+    pub fn workspaces_with_render_geo_for_chrome(
+        &self,
+    ) -> impl Iterator<Item = (&Workspace<W>, Rectangle<f64, Logical>)> {
+        self.workspaces_with_render_geo()
+            .filter(|_| self.overview_progress.is_none())
+    }
+
     pub fn workspaces_with_render_geo_idx(
         &self,
     ) -> impl Iterator<Item = ((usize, &Workspace<W>), Rectangle<f64, Logical>)> {
@@ -1810,36 +1808,6 @@ impl<W: LayoutElement> Monitor<W> {
                     }
                 }
             }
-        }
-    }
-
-    pub fn render_workspace_shadows<R: NiriRenderer>(
-        &self,
-        renderer: &mut R,
-        push: &mut dyn FnMut(MonitorRenderElement<R>),
-    ) {
-        let Some(progress) = self.overview_progress.as_ref().map(|p| p.clamped_value()) else {
-            return;
-        };
-        let alpha = progress.clamp(0., 1.) as f32;
-
-        let _span = tracy_client::span!("Monitor::render_workspace_shadows");
-
-        let scale = self.scale.fractional_scale();
-        let zoom = self.overview_zoom();
-
-        for (ws, geo) in self.workspaces_with_render_geo() {
-            ws.render_shadow(renderer, &mut |elem| {
-                let elem = elem.with_alpha(alpha);
-                let elem = MonitorInnerRenderElement::Shadow(elem);
-                let elem = RescaleRenderElement::from_element(elem, Point::from((0, 0)), zoom);
-                let elem = RelocateRenderElement::from_element(
-                    elem,
-                    geo.loc.to_physical_precise_round(scale),
-                    Relocate::Relative,
-                );
-                push(elem);
-            });
         }
     }
 

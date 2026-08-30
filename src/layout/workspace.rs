@@ -31,7 +31,6 @@ use crate::animation::Clock;
 use crate::layout::RenderLayer;
 use crate::niri_render_elements;
 use crate::render_helpers::renderer::NiriRenderer;
-use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::xray::{Xray, XrayPos};
 use crate::render_helpers::RenderCtx;
@@ -1664,14 +1663,6 @@ impl<W: LayoutElement> Workspace<W> {
             layer,
             &mut |elem| push(elem.into()),
         );
-    }
-
-    pub fn render_shadow<R: NiriRenderer>(
-        &self,
-        renderer: &mut R,
-        push: &mut dyn FnMut(ShadowRenderElement),
-    ) {
-        self.shadow.render(renderer, Point::from((0., 0.)), push);
     }
 
     pub fn render_background(&self) -> SolidColorRenderElement {
