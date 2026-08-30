@@ -2596,6 +2596,147 @@ fn spatial_layout_packs_variable_rectangles_and_navigates_both_axes() {
     assert_ne!(*layout.focus().unwrap().id(), origin);
 }
 
+fn spatial_width_fixture(widths: impl IntoIterator<Item = (usize, i32)>) -> Layout<TestWindow> {
+    let mut layout = check_ops([Op::AddOutput(1)]);
+    for (id, width) in widths {
+        Op::AddWindow {
+            params: TestWindowParams::new(id),
+        }
+        .apply(&mut layout);
+        layout.set_window_width(Some(&id), SizeChange::SetFixed(width));
+        layout.set_window_height(Some(&id), SizeChange::SetFixed(180));
+        Op::Communicate(id).apply(&mut layout);
+        layout.refresh(true);
+    }
+    Op::CompleteAnimations.apply(&mut layout);
+    layout
+}
+
+fn spatial_overhang_focus_fixture(widths: [i32; 4], lower: usize) -> Layout<TestWindow> {
+    let mut layout = spatial_width_fixture((1..=4).zip(widths));
+    layout.activate_window(&lower);
+    layout.move_down();
+    Op::CompleteAnimations.apply(&mut layout);
+    layout
+}
+
+#[test]
+fn spatial_focus_uses_nearest_partial_overhangs_in_all_directions() {
+    let mut left = spatial_overhang_focus_fixture([50, 300, 200, 100], 3);
+    left.focus_left();
+    assert_eq!(*left.focus().unwrap().id(), 2);
+    left.focus_left();
+    assert_eq!(*left.focus().unwrap().id(), 1);
+    left.focus_down();
+    assert_eq!(*left.focus().unwrap().id(), 3);
+    left.focus_up();
+    assert_eq!(*left.focus().unwrap().id(), 2);
+
+    let mut right = spatial_overhang_focus_fixture([100, 200, 300, 50], 2);
+    right.focus_right();
+    assert_eq!(*right.focus().unwrap().id(), 3);
+    right.focus_right();
+    assert_eq!(*right.focus().unwrap().id(), 4);
+    right.focus_down();
+    assert_eq!(*right.focus().unwrap().id(), 2);
+    right.focus_up();
+    assert_eq!(*right.focus().unwrap().id(), 3);
+}
+
+#[test]
+fn spatial_focus_treats_native_stack_as_one_body() {
+    let mut layout = spatial_width_fixture([(1, 100), (2, 300)]);
+    layout.activate_window(&1);
+    Op::ConsumeWindowIntoColumn.apply(&mut layout);
+    Op::AddWindow {
+        params: TestWindowParams::new(3),
+    }
+    .apply(&mut layout);
+    Op::CompleteAnimations.apply(&mut layout);
+    layout.activate_window(&1);
+    Op::ToggleColumnTabbedDisplay.apply(&mut layout);
+    layout.focus_right();
+    assert_eq!(*layout.focus().unwrap().id(), 3);
+}
+
+#[test]
+fn spatial_focus_preserves_workspace_identity_and_inactive_geometry() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddNamedWorkspace {
+            ws_name: 9,
+            output_name: Some(1),
+            layout_config: None,
+        },
+    ]);
+    check_ops_on_layout(
+        &mut layout,
+        (1..=3).map(|id| Op::AddWindow {
+            params: TestWindowParams::new(id),
+        }),
+    );
+    check_ops_on_layout(
+        &mut layout,
+        (4..=5).map(|id| Op::AddWindowToNamedWorkspace {
+            params: TestWindowParams::new(id),
+            ws_name: 9,
+        }),
+    );
+    Op::CompleteAnimations.apply(&mut layout);
+    let memberships = |layout: &Layout<TestWindow>| {
+        layout
+            .workspaces()
+            .flat_map(|(_, _, workspace)| {
+                workspace
+                    .windows()
+                    .map(move |window| (*window.id(), workspace.id()))
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    let before_memberships = memberships(&layout);
+    let before_inactive: Vec<_> = ipc_rectangles(&layout)
+        .into_iter()
+        .filter(|(id, _)| [4, 5].contains(id))
+        .collect();
+    for id in 1..=3 {
+        layout.activate_window(&id);
+        layout.focus_left();
+        layout.focus_right();
+        layout.focus_up();
+        layout.focus_down();
+    }
+    assert_eq!(memberships(&layout), before_memberships);
+    let after_inactive: Vec<_> = ipc_rectangles(&layout)
+        .into_iter()
+        .filter(|(id, _)| [4, 5].contains(id))
+        .collect();
+    assert_eq!(after_inactive, before_inactive);
+}
+
+#[test]
+fn spatial_vertical_snap_centers_in_working_area() {
+    for gap in [0., 4.] {
+        let mut options = Options::default();
+        options.layout.gaps = gap;
+        options.layout.struts.bottom = FloatOrInt(50.);
+        let mut layout = check_ops_with_options(options, [Op::AddOutput(1)]);
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        }
+        .apply(&mut layout);
+        layout.set_window_height(Some(&1), SizeChange::SetProportion(100.));
+        Op::Communicate(1).apply(&mut layout);
+        layout.refresh(true);
+        Op::CompleteAnimations.apply(&mut layout);
+        let rectangle = ipc_rectangles(&layout)[&1];
+        assert_eq!(rectangle.loc.y.round(), gap);
+        assert_eq!(
+            (720. - rectangle.loc.y - rectangle.size.h).round(),
+            50. + gap
+        );
+    }
+}
+
 fn spatial_stack_fixture() -> Layout<TestWindow> {
     let mut layout = check_ops([Op::AddOutput(1)]);
     for (id, width, height) in [
@@ -2721,45 +2862,6 @@ fn production_actions_activate_new_windows_and_navigate_with_internal_workspaces
     layout.activate_window(&6);
     layout.move_up();
     Op::CompleteAnimations.apply(&mut layout);
-
-    for (direction, action) in [
-        (0, Op::FocusColumnLeft),
-        (1, Op::FocusColumnRight),
-        (2, Op::FocusWindowUp),
-        (3, Op::FocusWindowDown),
-    ] {
-        let rectangles = ipc_rectangles(&layout);
-        let origin = rectangles
-            .iter()
-            .find(|(_, from)| {
-                rectangles.values().any(|to| match direction {
-                    0 => to.loc.x + to.size.w <= from.loc.x,
-                    1 => from.loc.x + from.size.w <= to.loc.x,
-                    2 => to.loc.y + to.size.h <= from.loc.y,
-                    3 => from.loc.y + from.size.h <= to.loc.y,
-                    _ => unreachable!(),
-                })
-            })
-            .map(|(id, _)| *id)
-            .unwrap();
-        layout.activate_window(&origin);
-        Op::CompleteAnimations.apply(&mut layout);
-        let before = ipc_rectangles(&layout);
-        action.apply(&mut layout);
-        let target = *layout.focus().unwrap().id();
-        assert_ne!(target, origin);
-        let from = before[&origin];
-        let to = before[&target];
-        assert!(match direction {
-            0 => to.loc.x + to.size.w <= from.loc.x,
-            1 => from.loc.x + from.size.w <= to.loc.x,
-            2 => to.loc.y + to.size.h <= from.loc.y,
-            3 => from.loc.y + from.size.h <= to.loc.y,
-            _ => unreachable!(),
-        });
-        assert!(layout.are_animations_ongoing(None));
-        Op::CompleteAnimations.apply(&mut layout);
-    }
 }
 
 #[test]

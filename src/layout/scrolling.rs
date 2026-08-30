@@ -847,8 +847,9 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     ) {
         let (_, tile_offset) = self.columns[column_idx].tiles().nth(tile_idx).unwrap();
         let tile = &self.columns[column_idx].tiles[tile_idx];
+        let working_center = self.working_area.loc.y + self.working_area.size.h / 2.;
         let target = self.data[column_idx].position.y + tile_offset.y + tile.tile_size().h / 2.
-            - self.view_size.h / 2.;
+            - working_center;
         if (target - self.view_y_offset.target()).abs() < 1. / self.scale {
             self.view_y_offset
                 .offset(target - self.view_y_offset.target());
@@ -1715,6 +1716,51 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             .collect()
     }
 
+    fn focus_snapshot(&self) -> navigation::Snapshot<W::Id> {
+        let mut bodies = Vec::with_capacity(self.columns.len());
+        for (column, data) in zip(&self.columns, &self.data) {
+            let mut tiles = column.tiles();
+            let (first, offset) = tiles.next().unwrap();
+            let mut rectangle = Rectangle::new(data.position + offset, first.tile_size());
+            let mut members = vec![first.window().id().clone()];
+            for (tile, offset) in tiles {
+                rectangle =
+                    rectangle.merge(Rectangle::new(data.position + offset, tile.tile_size()));
+                members.push(tile.window().id().clone());
+            }
+            bodies.push(navigation::Body {
+                spatial_id: column.id,
+                members,
+                rectangle,
+            });
+        }
+        let gap = self.options.layout.gaps;
+        let mut contacts = Vec::new();
+        for a in 0..bodies.len() {
+            for b in a + 1..bodies.len() {
+                let first = bodies[a].rectangle;
+                let second = bodies[b].rectangle;
+                let overlaps_x = first.loc.x < second.loc.x + second.size.w
+                    && second.loc.x < first.loc.x + first.size.w;
+                let overlaps_y = first.loc.y < second.loc.y + second.size.h
+                    && second.loc.y < first.loc.y + first.size.h;
+                if overlaps_y
+                    && (first.loc.x + first.size.w + gap == second.loc.x
+                        || second.loc.x + second.size.w + gap == first.loc.x)
+                {
+                    contacts.push((a, b, navigation::Axis::X));
+                }
+                if overlaps_x
+                    && (first.loc.y + first.size.h + gap == second.loc.y
+                        || second.loc.y + second.size.h + gap == first.loc.y)
+                {
+                    contacts.push((a, b, navigation::Axis::Y));
+                }
+            }
+        }
+        navigation::Snapshot { bodies, contacts }
+    }
+
     fn spatial_components(
         &self,
         tiles: &[(W::Id, Rectangle<f64, Logical>, u64)],
@@ -1817,22 +1863,15 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         let Some(current) = self.active_window().map(|window| window.id().clone()) else {
             return false;
         };
-        let Some(target) = navigation::nearest(&current, direction, &self.spatial_tiles()) else {
+        let snapshot = self.focus_snapshot();
+        let Some(target) = navigation::nearest_body(&current, direction, &snapshot) else {
             return false;
         };
-        let Some((column_idx, tile_idx)) =
-            self.columns
-                .iter()
-                .enumerate()
-                .find_map(|(column_idx, column)| {
-                    column
-                        .position(&target)
-                        .map(|tile_idx| (column_idx, tile_idx))
-                })
-        else {
-            return false;
-        };
-        self.columns[column_idx].activate_idx(tile_idx);
+        let column_idx = self
+            .columns
+            .iter()
+            .position(|column| column.id == target)
+            .unwrap();
         self.activate_column(column_idx);
         true
     }
