@@ -1366,22 +1366,23 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         &self,
         removed_idx: usize,
     ) -> Vec<(ColumnId, Point<f64, Logical>)> {
-        if self.columns.len() < 3 {
-            return Vec::new();
-        }
-        let bodies = zip(&self.columns, &self.data)
+        let gap = self.options.layout.gaps;
+        let mut bodies = zip(&self.columns, &self.data)
             .map(|(column, data)| {
-                let mut tiles = column
-                    .tiles()
-                    .map(|(tile, offset)| Rectangle::new(data.position + offset, tile.tile_size()));
-                let first = tiles.next().unwrap();
-                let body = tiles.fold(first, |body, tile| body.merge(tile));
-                (column.id, body)
+                let tile = column.tiles().next().unwrap();
+                (
+                    column.id,
+                    Rectangle::new(data.position + tile.1, tile.0.tile_size()),
+                )
             })
             .collect::<Vec<_>>();
-        let removed = bodies[removed_idx];
-        let gap = self.options.layout.gaps;
-        let contacts = |a: Rectangle<f64, Logical>, b: Rectangle<f64, Logical>| {
+        let remaining = (0..bodies.len())
+            .filter(|idx| *idx != removed_idx)
+            .collect::<Vec<_>>();
+        if remaining.len() < 2 {
+            return Vec::new();
+        }
+        let contact = |a, b| {
             [
                 navigation::Direction::Left,
                 navigation::Direction::Right,
@@ -1391,125 +1392,97 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             .into_iter()
             .any(|direction| navigation::strict_contact(a, b, direction, gap))
         };
-        let mut repairs: Vec<(ColumnId, Point<f64, Logical>)> = Vec::new();
-        for (before, after, horizontal) in [
-            (
-                navigation::Direction::Left,
-                navigation::Direction::Right,
-                true,
-            ),
-            (
-                navigation::Direction::Up,
-                navigation::Direction::Down,
-                false,
-            ),
-        ] {
-            let anchors = bodies
-                .iter()
-                .enumerate()
-                .filter(|(idx, (_, body))| {
-                    *idx != removed_idx && navigation::strict_contact(removed.1, *body, before, gap)
-                })
-                .map(|(_, body)| *body)
-                .collect::<Vec<_>>();
-            let seeds = bodies
-                .iter()
-                .enumerate()
-                .filter(|(idx, (_, body))| {
-                    *idx != removed_idx && navigation::strict_contact(removed.1, *body, after, gap)
-                })
-                .map(|(_, body)| *body)
-                .collect::<Vec<_>>();
-            if anchors.is_empty() || seeds.is_empty() {
+        let separated = |a: Rectangle<f64, Logical>, b: Rectangle<f64, Logical>| {
+            a.loc.x >= b.loc.x + b.size.w + gap
+                || b.loc.x >= a.loc.x + a.size.w + gap
+                || a.loc.y >= b.loc.y + b.size.h + gap
+                || b.loc.y >= a.loc.y + a.size.h + gap
+        };
+        let mut components = Vec::<Vec<usize>>::new();
+        for idx in remaining {
+            if components.iter().flatten().any(|other| *other == idx) {
                 continue;
             }
-            let mut component = seeds.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+            let mut component = vec![idx];
             let mut next = 0;
             while next < component.len() {
-                let body = bodies
-                    .iter()
-                    .find(|(id, _)| *id == component[next])
-                    .unwrap()
-                    .1;
-                for (id, candidate) in &bodies {
-                    if *id != removed.0 && !component.contains(id) && contacts(body, *candidate) {
-                        component.push(*id);
+                for candidate in 0..bodies.len() {
+                    if candidate != removed_idx
+                        && !component.contains(&candidate)
+                        && contact(bodies[component[next]].1, bodies[candidate].1)
+                    {
+                        component.push(candidate);
                     }
                 }
                 next += 1;
             }
-            if anchors.iter().any(|(id, _)| component.contains(id)) {
-                continue;
-            }
-            if component
-                .iter()
-                .any(|id| repairs.iter().any(|(repaired, _)| repaired == id))
-            {
-                continue;
-            }
-            let pair = anchors.iter().find_map(|anchor| {
-                seeds.iter().find_map(|seed| {
-                    let overlap = if horizontal {
-                        (anchor.1.loc.y + anchor.1.size.h).min(seed.1.loc.y + seed.1.size.h)
-                            - anchor.1.loc.y.max(seed.1.loc.y)
-                    } else {
-                        (anchor.1.loc.x + anchor.1.size.w).min(seed.1.loc.x + seed.1.size.w)
-                            - anchor.1.loc.x.max(seed.1.loc.x)
-                    };
-                    (overlap > 0.).then_some((anchor.1, seed.1))
-                })
-            });
-            let Some((anchor, seed)) = pair else {
-                continue;
-            };
-            let delta = if horizontal {
-                Point::from((anchor.loc.x + anchor.size.w + gap - seed.loc.x, 0.))
-            } else {
-                Point::from((0., anchor.loc.y + anchor.size.h + gap - seed.loc.y))
-            };
-            let moved_seed = Rectangle::new(seed.loc + delta, seed.size);
-            let repaired_contact = if horizontal {
-                navigation::strict_contact(anchor, moved_seed, navigation::Direction::Right, gap)
-            } else {
-                navigation::strict_contact(anchor, moved_seed, navigation::Direction::Down, gap)
-            };
-            if !repaired_contact {
-                continue;
-            }
-            for id in component {
-                if let Some((_, existing)) = repairs.iter_mut().find(|(other, _)| *other == id) {
-                    *existing += delta;
-                } else {
-                    repairs.push((id, delta));
-                }
-            }
+            components.push(component);
         }
-
-        let valid = bodies.iter().all(|(id, body)| {
-            if *id == removed.0 {
-                return true;
-            }
-            let delta = repairs
-                .iter()
-                .find_map(|(other, delta)| (*other == *id).then_some(*delta))
-                .unwrap_or_default();
-            let moved = Rectangle::new(body.loc + delta, body.size);
-            bodies.iter().all(|(other_id, other)| {
-                if *other_id == removed.0 || *other_id == *id {
-                    return true;
+        let mut retained = components.remove(0);
+        let mut repairs = Vec::<(ColumnId, Point<f64, Logical>)>::new();
+        while !components.is_empty() {
+            let mut best = None;
+            for (component_idx, component) in components.iter().enumerate() {
+                for anchor_idx in &retained {
+                    let anchor = bodies[*anchor_idx].1;
+                    for seed_idx in component {
+                        let seed = bodies[*seed_idx].1;
+                        for direction in [
+                            navigation::Direction::Left,
+                            navigation::Direction::Right,
+                            navigation::Direction::Up,
+                            navigation::Direction::Down,
+                        ] {
+                            let delta = match direction {
+                                navigation::Direction::Left => {
+                                    Point::from((anchor.loc.x - gap - seed.loc.x - seed.size.w, 0.))
+                                }
+                                navigation::Direction::Right => Point::from((
+                                    anchor.loc.x + anchor.size.w + gap - seed.loc.x,
+                                    0.,
+                                )),
+                                navigation::Direction::Up => {
+                                    Point::from((0., anchor.loc.y - gap - seed.loc.y - seed.size.h))
+                                }
+                                navigation::Direction::Down => Point::from((
+                                    0.,
+                                    anchor.loc.y + anchor.size.h + gap - seed.loc.y,
+                                )),
+                            };
+                            let moved_seed = Rectangle::new(seed.loc + delta, seed.size);
+                            if !navigation::strict_contact(anchor, moved_seed, direction, gap) {
+                                continue;
+                            }
+                            let valid = component.iter().all(|idx| {
+                                let body = bodies[*idx].1;
+                                let moved = Rectangle::new(body.loc + delta, body.size);
+                                (0..bodies.len()).all(|other| {
+                                    other == removed_idx
+                                        || component.contains(&other)
+                                        || separated(moved, bodies[other].1)
+                                })
+                            });
+                            if valid {
+                                let distance = delta.x * delta.x + delta.y * delta.y;
+                                if best.as_ref().is_none_or(|(old, _, _)| distance < *old) {
+                                    best = Some((distance, component_idx, delta));
+                                }
+                            }
+                        }
+                    }
                 }
-                let other_delta = repairs
-                    .iter()
-                    .find_map(|(candidate, delta)| (*candidate == *other_id).then_some(*delta))
-                    .unwrap_or_default();
-                let other = Rectangle::new(other.loc + other_delta, other.size);
-                moved.loc.x >= other.loc.x + other.size.w + gap
-                    || other.loc.x >= moved.loc.x + moved.size.w + gap
-                    || moved.loc.y >= other.loc.y + other.size.h + gap
-                    || other.loc.y >= moved.loc.y + moved.size.h + gap
-            })
-        });
-        valid.then_some(repairs).unwrap_or_default()
+            }
+            let Some((_, component_idx, delta)) = best else {
+                return Vec::new();
+            };
+            let component = components.remove(component_idx);
+            for idx in &component {
+                bodies[*idx].1.loc += delta;
+                repairs.push((bodies[*idx].0, delta));
+            }
+            retained.extend(component);
+        }
+        repairs
     }
 
     pub fn remove_column_by_idx(

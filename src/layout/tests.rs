@@ -2709,35 +2709,45 @@ fn invalid_directional_move_is_a_complete_noop() {
 }
 
 #[test]
-fn middle_removal_repairs_only_the_freed_contact_side() {
+fn bridge_removal_reconnects_horizontal_and_vertical_components() {
     let gap = Options::default().layout.gaps;
-    let mut layout = check_ops([
-        Op::AddOutput(1),
-        Op::AddWindow {
-            params: TestWindowParams::new(1),
-        },
-        Op::AddWindow {
-            params: TestWindowParams::new(2),
-        },
-        Op::AddWindow {
-            params: TestWindowParams::new(3),
-        },
-    ]);
-    Op::CompleteAnimations.apply(&mut layout);
-    let before = ipc_rectangles(&layout);
-    Op::CloseWindow(2).apply(&mut layout);
-    Op::CompleteAnimations.apply(&mut layout);
-    let after = ipc_rectangles(&layout);
-    assert_eq!(
-        after[&3].loc.x,
-        after[&1].loc.x + after[&1].size.w + gap,
-        "before={before:?} after={after:?}"
-    );
-    assert_eq!(
-        after[&3].loc.y - after[&1].loc.y,
-        before[&3].loc.y - before[&1].loc.y
-    );
-    assert_eq!(after[&3].size, before[&3].size);
+    for vertical in [false, true] {
+        let mut layout = check_ops([Op::AddOutput(1)]);
+        for id in 1..=9 {
+            Op::AddWindow {
+                params: TestWindowParams::new(id),
+            }
+            .apply(&mut layout);
+        }
+        if vertical {
+            for id in 2..=9 {
+                position_contact(&mut layout, id, id - 1, true);
+            }
+        }
+        Op::CompleteAnimations.apply(&mut layout);
+        let before = ipc_rectangles(&layout);
+        Op::CloseWindow(5).apply(&mut layout);
+        Op::CompleteAnimations.apply(&mut layout);
+        let after = ipc_rectangles(&layout);
+        for id in [1, 2, 3, 4, 6, 7, 8, 9] {
+            assert_eq!(after[&id].size, before[&id].size);
+        }
+        for component in [[1, 2, 3, 4], [6, 7, 8, 9]] {
+            for id in component {
+                assert_eq!(
+                    after[&id].loc - after[&component[0]].loc,
+                    before[&id].loc - before[&component[0]].loc
+                );
+            }
+        }
+        let (anchor, orphan) = (after[&4], after[&6]);
+        let primary_gap = if vertical {
+            orphan.loc.y - anchor.loc.y - anchor.size.h
+        } else {
+            orphan.loc.x - anchor.loc.x - anchor.size.w
+        };
+        assert!((primary_gap - gap).abs() <= 1.);
+    }
 }
 
 #[test]
@@ -2766,6 +2776,15 @@ fn edge_removal_does_not_repair_without_two_sides() {
             before[&survivors[1]].loc - before[&survivors[0]].loc
         );
     }
+
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+    ]);
+    Op::CloseWindow(1).apply(&mut layout);
+    assert!(layout.windows().next().is_none());
 }
 
 #[test]
