@@ -2576,6 +2576,57 @@ fn strict_contact_horizontal_moves_are_symmetric_for_unequal_windows() {
 }
 
 #[test]
+fn stacked_unequal_columns_and_tiles_move_with_axis_only_mirrors() {
+    let gap = Options::default().layout.gaps;
+    let mut layout = check_ops([Op::AddOutput(1)]);
+    for (id, width, height) in [(4, 1000, 80), (5, 2000, 120), (7, 1700, 95), (8, 1100, 150)] {
+        Op::AddWindow {
+            params: TestWindowParams::new(id),
+        }
+        .apply(&mut layout);
+        layout.set_window_width(Some(&id), SizeChange::SetFixed(width));
+        layout.set_window_height(Some(&id), SizeChange::SetFixed(height));
+        Op::Communicate(id).apply(&mut layout);
+        layout.refresh(true);
+        if !matches!(id, 4 | 7) {
+            layout.consume_or_expel_window_left(None);
+            Op::Communicate(id).apply(&mut layout);
+            layout.refresh(true);
+        }
+    }
+    Op::CompleteAnimations.apply(&mut layout);
+    layout.activate_window(&4);
+    Op::CompleteAnimations.apply(&mut layout);
+    let before = ipc_rectangles(&layout);
+    assert_eq!(before[&4].size.w, 1000.);
+    assert_eq!(before[&7].size.w, 1700.);
+
+    layout.move_right();
+    Op::CompleteAnimations.apply(&mut layout);
+    let right = ipc_rectangles(&layout);
+    assert_eq!(right[&4].loc.x - right[&7].loc.x, before[&7].size.w + gap);
+    for id in [4, 5, 7, 8] {
+        assert_eq!(right[&id].loc.y, before[&id].loc.y);
+        assert_eq!(right[&id].size, before[&id].size);
+    }
+    layout.move_left();
+    Op::CompleteAnimations.apply(&mut layout);
+    assert_eq!(ipc_rectangles(&layout), before);
+
+    layout.move_down();
+    Op::CompleteAnimations.apply(&mut layout);
+    let down = ipc_rectangles(&layout);
+    assert_eq!(down[&4].loc.y - down[&5].loc.y, before[&5].size.h + gap);
+    for id in [4, 5, 7, 8] {
+        assert_eq!(down[&id].loc.x, before[&id].loc.x);
+        assert_eq!(down[&id].size, before[&id].size);
+    }
+    layout.move_up();
+    Op::CompleteAnimations.apply(&mut layout);
+    assert_eq!(ipc_rectangles(&layout), before);
+}
+
+#[test]
 fn invalid_directional_move_is_a_complete_noop() {
     let mut layout = check_ops([
         Op::AddOutput(1),

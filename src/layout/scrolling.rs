@@ -2179,6 +2179,84 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         };
         let (current_column, current_tile) = locate(&current);
         let (target_column, target_tile) = locate(&target);
+        let horizontal = matches!(
+            direction,
+            navigation::Direction::Left | navigation::Direction::Right
+        );
+
+        if horizontal
+            && current_column != target_column
+            && (self.columns[current_column].tiles.len() != 1
+                || self.columns[target_column].tiles.len() != 1)
+        {
+            let gap = self.options.layout.gaps;
+            let current_position = self.data[current_column].position;
+            let target_position = self.data[target_column].position;
+            let current_width = self.data[current_column].width;
+            let target_width = self.data[target_column].width;
+            let (next_current_x, next_target_x) = match direction {
+                navigation::Direction::Left => {
+                    (target_position.x, target_position.x + current_width + gap)
+                }
+                navigation::Direction::Right => {
+                    (current_position.x + target_width + gap, current_position.x)
+                }
+                _ => unreachable!(),
+            };
+            if current_column.abs_diff(target_column) != 1
+                || self.columns[current_column].tiles[current_tile]
+                    .tile_size()
+                    .w
+                    != current_width
+                || self.columns[target_column].tiles[target_tile].tile_size().w != target_width
+            {
+                return false;
+            }
+
+            self.data[current_column].position.x = next_current_x;
+            self.data[target_column].position.x = next_target_x;
+            self.columns[current_column].animate_move_x_from(current_position.x - next_current_x);
+            self.columns[target_column].animate_move_x_from(target_position.x - next_target_x);
+            self.columns.swap(current_column, target_column);
+            self.data.swap(current_column, target_column);
+            self.placement.remember(&self.spatial_items());
+            self.activate_column_with_anim_config(
+                target_column,
+                self.options.animations.window_movement.0,
+            );
+            return true;
+        }
+
+        if !horizontal && current_column == target_column {
+            let column_position = self.data[current_column].position;
+            let current_rendered = column_position
+                + self.columns[current_column].tile_offset(current_tile)
+                + self.columns[current_column].tiles[current_tile].render_offset();
+            let target_rendered = column_position
+                + self.columns[current_column].tile_offset(target_tile)
+                + self.columns[current_column].tiles[target_tile].render_offset();
+            let column = &mut self.columns[current_column];
+            column.tiles.swap(current_tile, target_tile);
+            column.data.swap(current_tile, target_tile);
+            column.active_tile_idx = target_tile;
+            let current_position = column_position + column.tile_offset(target_tile);
+            let target_position = column_position + column.tile_offset(current_tile);
+            column.tiles[target_tile].stop_move_animations();
+            column.tiles[target_tile].animate_move_from(current_rendered - current_position);
+            column.tiles[current_tile].stop_move_animations();
+            column.tiles[current_tile].animate_move_from(target_rendered - target_position);
+            self.placement.remember(&self.spatial_items());
+            let config = self.options.animations.window_movement.0;
+            self.animate_view_offset_to_column_with_config(
+                None,
+                current_column,
+                Some(current_column),
+                config,
+            );
+            self.animate_view_y_to_tile(current_column, target_tile, config);
+            return true;
+        }
+
         if self.columns[current_column].tiles.len() != 1
             || self.columns[target_column].tiles.len() != 1
         {
