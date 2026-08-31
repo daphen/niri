@@ -10,7 +10,7 @@ use super::*;
 use crate::tests::client::{LayerConfigureProps, LayerMargin};
 
 #[test]
-fn overview_workspace_content_ignores_repeated_bottom_exclusive_zone() {
+fn gesture_and_overview_workspace_content_ignore_repeated_bottom_exclusive_zone() {
     let mut config = Config::default();
     config.layout.gaps = 4.;
     for name in ["one", "two"] {
@@ -41,6 +41,39 @@ fn overview_workspace_content_ignores_repeated_bottom_exclusive_zone() {
     layer.ack_last_and_commit();
     f.double_roundtrip(id);
 
+    let output = f.niri().layout.outputs().next().unwrap().clone();
+    f.niri()
+        .layout
+        .workspace_switch_gesture_begin(&output, true);
+    f.niri().layout.workspace_switch_gesture_update(
+        120.,
+        std::time::Duration::from_millis(10),
+        true,
+    );
+
+    let monitor = f.niri().layout.monitors().next().unwrap();
+    let geos: Vec<_> = monitor
+        .workspaces_with_render_geo()
+        .map(|(_, geo)| geo)
+        .collect();
+    assert_eq!(geos[0].loc.y, -102.);
+    assert_eq!(geos[0].loc.y + 1080. - 50. - 4., geos[1].loc.y + 4.);
+
+    f.niri().layout.workspace_switch_gesture_end(Some(true));
+    let monitor = f.niri().layout.monitors().next().unwrap();
+    let geos: Vec<_> = monitor
+        .workspaces_with_render_geo()
+        .map(|(_, geo)| geo)
+        .collect();
+    assert_eq!(geos[0].loc.y, -102.);
+    assert_eq!(geos[0].loc.y + 1080. - 50. - 4., geos[1].loc.y + 4.);
+
+    f.niri_complete_animations();
+    let monitor = f.niri().layout.monitors().next().unwrap();
+    let geos: Vec<_> = monitor.workspaces_render_geo().collect();
+    assert_eq!(geos[0].loc.y, 0.);
+    assert_eq!(geos[0].size.h, 1080.);
+
     f.niri().layout.toggle_overview();
     f.niri_complete_animations();
     let monitor = f.niri().layout.monitors().next().unwrap();
@@ -51,7 +84,6 @@ fn overview_workspace_content_ignores_repeated_bottom_exclusive_zone() {
         .collect();
     let first_content_bottom = geos[0].loc.y + (1080. - 50. - 4.) * zoom;
     let second_content_top = geos[1].loc.y + 4. * zoom;
-
     assert_eq!(first_content_bottom, second_content_top);
 }
 
