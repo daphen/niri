@@ -133,7 +133,7 @@ use crate::input::scroll_swipe_gesture::ScrollSwipeGesture;
 use crate::input::scroll_tracker::ScrollTracker;
 use crate::input::{
     apply_libinput_settings, mods_with_finger_scroll_binds, mods_with_mouse_binds,
-    mods_with_wheel_binds, TabletData,
+    mods_with_wheel_binds, PaletteGestureState, TabletData,
 };
 use crate::ipc::server::IpcServer;
 use crate::layer::mapped::LayerSurfaceRenderElement;
@@ -370,6 +370,7 @@ pub struct Niri {
     pub pointer_inside_hot_corner: bool,
     pub tablet_cursor_location: Option<Point<f64, Logical>>,
     pub gesture_swipe_3f_cumulative: Option<(f64, f64)>,
+    pub gesture_swipe_4f: Option<PaletteGestureState>,
     pub overview_scroll_swipe_gesture: ScrollSwipeGesture,
     pub vertical_wheel_tracker: ScrollTracker,
     pub horizontal_wheel_tracker: ScrollTracker,
@@ -2581,6 +2582,7 @@ impl Niri {
             pointer_inside_hot_corner: false,
             tablet_cursor_location: None,
             gesture_swipe_3f_cumulative: None,
+            gesture_swipe_4f: None,
             overview_scroll_swipe_gesture: ScrollSwipeGesture::new(),
             vertical_wheel_tracker: ScrollTracker::new(120),
             horizontal_wheel_tracker: ScrollTracker::new(120),

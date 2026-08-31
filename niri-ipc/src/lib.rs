@@ -1565,6 +1565,19 @@ pub enum CastTarget {
     },
 }
 
+/// A phase of an interactive palette gesture.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum PaletteGesturePhase {
+    /// Interactive movement started.
+    Begin,
+    /// Interactive movement changed.
+    Update,
+    /// Interactive movement ended or was cancelled.
+    End,
+}
+
 /// A compositor event.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
@@ -1668,6 +1681,17 @@ pub enum Event {
     OverviewOpenedOrClosed {
         /// The new state of the overview.
         is_open: bool,
+    },
+    /// A four-finger palette gesture changed state.
+    PaletteGesture {
+        /// Current gesture phase.
+        phase: PaletteGesturePhase,
+        /// Current normalized open progress.
+        progress: f64,
+        /// Normalized release velocity in progress units per second.
+        velocity: f64,
+        /// Whether the palette should settle open after the gesture ends.
+        open: bool,
     },
     /// The configuration was reloaded.
     ///
@@ -2044,6 +2068,31 @@ impl OutputAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn palette_gesture_event_json_roundtrip() {
+        let event = Event::PaletteGesture {
+            phase: PaletteGesturePhase::End,
+            progress: 0.75,
+            velocity: 1.25,
+            open: true,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert_eq!(
+            json,
+            r#"{"PaletteGesture":{"phase":"end","progress":0.75,"velocity":1.25,"open":true}}"#
+        );
+        let decoded: Event = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            decoded,
+            Event::PaletteGesture {
+                phase: PaletteGesturePhase::End,
+                progress: 0.75,
+                velocity: 1.25,
+                open: true,
+            }
+        ));
+    }
 
     #[test]
     fn parse_size_change() {
