@@ -33,7 +33,7 @@ use crate::utils::{
 };
 
 /// Amount of touchpad movement to scroll the height of one workspace.
-const WORKSPACE_GESTURE_MOVEMENT: f64 = 300.;
+const WORKSPACE_GESTURE_MOVEMENT: f64 = 1200.;
 
 const WORKSPACE_GESTURE_RUBBER_BAND: RubberBand = RubberBand {
     stiffness: 0.5,
@@ -93,6 +93,7 @@ pub struct Monitor<W: LayoutElement> {
 #[derive(Debug)]
 pub enum WorkspaceSwitch {
     Animation(Animation),
+    GestureAnimation(Animation),
     Gesture(WorkspaceSwitchGesture),
 }
 
@@ -199,7 +200,9 @@ pub type MonitorRenderElement<R> =
 impl WorkspaceSwitch {
     pub fn current_idx(&self) -> f64 {
         match self {
-            WorkspaceSwitch::Animation(anim) => anim.value(),
+            WorkspaceSwitch::Animation(anim) | WorkspaceSwitch::GestureAnimation(anim) => {
+                anim.value()
+            }
             WorkspaceSwitch::Gesture(gesture) => {
                 gesture.current_idx + gesture.animation.as_ref().map_or(0., |anim| anim.value())
             }
@@ -208,14 +211,16 @@ impl WorkspaceSwitch {
 
     pub fn target_idx(&self) -> f64 {
         match self {
-            WorkspaceSwitch::Animation(anim) => anim.to(),
+            WorkspaceSwitch::Animation(anim) | WorkspaceSwitch::GestureAnimation(anim) => anim.to(),
             WorkspaceSwitch::Gesture(gesture) => gesture.current_idx,
         }
     }
 
     pub fn offset(&mut self, delta: isize) {
         match self {
-            WorkspaceSwitch::Animation(anim) => anim.offset(delta as f64),
+            WorkspaceSwitch::Animation(anim) | WorkspaceSwitch::GestureAnimation(anim) => {
+                anim.offset(delta as f64)
+            }
             WorkspaceSwitch::Gesture(gesture) => {
                 if delta >= 0 {
                     gesture.center_idx += delta as usize;
@@ -230,7 +235,7 @@ impl WorkspaceSwitch {
 
     fn is_animation_ongoing(&self) -> bool {
         match self {
-            WorkspaceSwitch::Animation(_) => true,
+            WorkspaceSwitch::Animation(_) | WorkspaceSwitch::GestureAnimation(_) => true,
             WorkspaceSwitch::Gesture(gesture) => gesture.animation.is_some(),
         }
     }
@@ -1036,7 +1041,7 @@ impl<W: LayoutElement> Monitor<W> {
 
     pub fn advance_animations(&mut self) {
         match &mut self.workspace_switch {
-            Some(WorkspaceSwitch::Animation(anim)) => {
+            Some(WorkspaceSwitch::Animation(anim) | WorkspaceSwitch::GestureAnimation(anim)) => {
                 if anim.is_done() {
                     self.workspace_switch = None;
                     self.clean_up_workspaces();
@@ -1367,13 +1372,26 @@ impl<W: LayoutElement> Monitor<W> {
         self.workspace_size(zoom)
     }
 
-    fn overview_workspace_size(&self, zoom: f64, progress: f64) -> Size<f64, Logical> {
+    fn compact_workspace_size(&self, zoom: f64, progress: f64) -> Size<f64, Logical> {
         let mut size = self.workspace_size(zoom);
         let repeated_inset =
             self.view_size.h - self.working_area.size.h + self.options.layout.gaps * 2.;
         let content_height = (self.view_size.h - repeated_inset * progress).max(0.) * zoom;
         size.h = round_logical_in_physical_max1(self.scale.fractional_scale(), content_height);
         size
+    }
+
+    fn magnetic_workspace_switch(&self) -> bool {
+        matches!(
+            self.workspace_switch,
+            Some(
+                WorkspaceSwitch::Gesture(WorkspaceSwitchGesture {
+                    is_touchpad: true,
+                    dnd_last_event_time: None,
+                    ..
+                }) | WorkspaceSwitch::GestureAnimation(_)
+            )
+        )
     }
 
     pub fn overview_zoom(&self) -> f64 {
@@ -1390,7 +1408,10 @@ impl<W: LayoutElement> Monitor<W> {
         // example when toggling the overview in the middle of an overview animation), then restart
         // the workspace switch to avoid jumps.
         if prev_render_idx != new_render_idx {
-            if let Some(WorkspaceSwitch::Animation(anim)) = &mut self.workspace_switch {
+            if let Some(
+                WorkspaceSwitch::Animation(anim) | WorkspaceSwitch::GestureAnimation(anim),
+            ) = &mut self.workspace_switch
+            {
                 // FIXME: maintain velocity.
                 *anim = anim.restarted(prev_render_idx, anim.to(), 0.);
             }
@@ -1406,7 +1427,10 @@ impl<W: LayoutElement> Monitor<W> {
         // If workspace switch and overview progress are matching animations, then compute a
         // correction term to make the movement appear monotonic.
         if let (
-            Some(WorkspaceSwitch::Animation(switch_anim)),
+            Some(
+                WorkspaceSwitch::Animation(switch_anim)
+                | WorkspaceSwitch::GestureAnimation(switch_anim),
+            ),
             Some(OverviewProgress::Animation(progress_anim)),
         ) = (&self.workspace_switch, &self.overview_progress)
         {
@@ -1458,11 +1482,11 @@ impl<W: LayoutElement> Monitor<W> {
                 // - first_y = -switch_anim.value() * from_height + to * (from_height - current_height)
                 let from = progress_anim.from();
                 let from_zoom = compute_overview_zoom(&self.options, Some(from));
-                let from_ws_height_with_gap = self.overview_workspace_size(from_zoom, from).h;
+                let from_ws_height_with_gap = self.compact_workspace_size(from_zoom, from).h;
 
                 let progress = progress_anim.value();
                 let zoom = self.overview_zoom();
-                let ws_height_with_gap = self.overview_workspace_size(zoom, progress).h;
+                let ws_height_with_gap = self.compact_workspace_size(zoom, progress).h;
 
                 let first_ws_y = -switch_anim.value() * from_ws_height_with_gap
                     + switch_anim.to() * (from_ws_height_with_gap - ws_height_with_gap);
@@ -1483,11 +1507,17 @@ impl<W: LayoutElement> Monitor<W> {
         let zoom = self.overview_zoom();
 
         let ws_size = self.workspace_size(zoom);
-        let ws_height_with_gap = self
+        let compact_progress = self
             .overview_progress
             .as_ref()
-            .map(|progress| self.overview_workspace_size(zoom, progress.value()).h)
-            .unwrap_or_else(|| self.workspace_size_with_gap(zoom).h);
+            .map_or(self.magnetic_workspace_switch() as u8 as f64, |progress| {
+                progress.value()
+            });
+        let ws_height_with_gap = if compact_progress == 0. {
+            self.workspace_size_with_gap(zoom).h
+        } else {
+            self.compact_workspace_size(zoom, compact_progress).h
+        };
 
         let static_offset = (self.view_size.to_point() - ws_size.to_point()).downscale(2.);
         let static_offset = static_offset
@@ -2022,13 +2052,24 @@ impl<W: LayoutElement> Monitor<W> {
         }
 
         self.active_workspace_idx = new_idx;
-        self.workspace_switch = Some(WorkspaceSwitch::Animation(Animation::new(
+        let animation = Animation::new(
             self.clock.clone(),
             gesture.current_idx,
             new_idx as f64,
             velocity,
-            self.options.animations.workspace_switch.0,
-        )));
+            if gesture.is_touchpad && gesture.dnd_last_event_time.is_none() {
+                self.options.animations.horizontal_view_movement.0
+            } else {
+                self.options.animations.workspace_switch.0
+            },
+        );
+        self.workspace_switch = Some(
+            if gesture.is_touchpad && gesture.dnd_last_event_time.is_none() {
+                WorkspaceSwitch::GestureAnimation(animation)
+            } else {
+                WorkspaceSwitch::Animation(animation)
+            },
+        );
 
         true
     }
@@ -2078,7 +2119,9 @@ impl<W: LayoutElement> Monitor<W> {
         );
         assert!(self.active_workspace_idx < self.workspaces.len());
 
-        if let Some(WorkspaceSwitch::Animation(anim)) = &self.workspace_switch {
+        if let Some(WorkspaceSwitch::Animation(anim) | WorkspaceSwitch::GestureAnimation(anim)) =
+            &self.workspace_switch
+        {
             let before_idx = anim.from() as usize;
             let after_idx = anim.to() as usize;
 
