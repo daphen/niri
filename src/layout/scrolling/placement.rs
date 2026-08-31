@@ -57,6 +57,44 @@ impl State {
             .collect();
         self.anchors.retain(|app, _| live_apps.contains(app));
 
+        if let Some(changed) = items.iter().find(|item| {
+            self.items
+                .iter()
+                .any(|old| old.0 == item.id && old.2 != item.size)
+        }) {
+            let position = changed.current.unwrap_or_default();
+            let resized = Rectangle::new(position, changed.size);
+            let reserved: Vec<_> = items
+                .iter()
+                .filter(|item| item.id != changed.id)
+                .filter_map(|item| Some((item.id, Rectangle::new(item.current?, item.size))))
+                .collect();
+            let targets = items
+                .iter()
+                .map(|item| {
+                    let current = item.current.unwrap_or_default();
+                    let position = if item.id == changed.id
+                        || free(Rectangle::new(current, item.size), 0., &[resized])
+                    {
+                        current
+                    } else {
+                        let occupied: Vec<_> = reserved
+                            .iter()
+                            .filter_map(|(id, rect)| (id != &item.id).then_some(*rect))
+                            .chain([resized])
+                            .collect();
+                        nearest_free(current, item.size, gap, &occupied)
+                    };
+                    Target {
+                        id: item.id,
+                        position,
+                    }
+                })
+                .collect();
+            self.remember(items);
+            return targets;
+        }
+
         let mut ordered: Vec<_> = items.iter().collect();
         ordered.sort_by_key(|item| item.order);
         let mut occupied = Vec::with_capacity(items.len());

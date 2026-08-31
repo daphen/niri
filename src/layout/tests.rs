@@ -2542,88 +2542,124 @@ fn rendered_rectangles(
         .collect()
 }
 
-#[test]
-fn strict_contact_horizontal_moves_are_symmetric_for_unequal_windows() {
-    let gap = Options::default().layout.gaps;
+fn position_contact(layout: &mut Layout<TestWindow>, source: usize, target: usize, below: bool) {
+    layout.activate_window(&target);
+    Op::CompleteAnimations.apply(layout);
+    let rectangles = ipc_rectangles(layout);
+    let from = rectangles[&source];
+    let to = rectangles[&target];
+    let gap = layout
+        .active_workspace()
+        .unwrap()
+        .scrolling()
+        .options()
+        .layout
+        .gaps;
+    let pointer = if below {
+        Point::from((
+            to.loc.x + to.size.w / 2.,
+            to.loc.y + to.size.h + gap + from.size.h / 2.,
+        ))
+    } else {
+        Point::from((
+            to.loc.x + to.size.w + gap + from.size.w / 2.,
+            to.loc.y + to.size.h / 2.,
+        ))
+    };
+    let workspace = layout.active_workspace_mut().unwrap();
+    assert!(workspace.snap_tiled_window_to_contact(&source, pointer));
+}
+
+fn singleton_grid_fixture() -> Layout<TestWindow> {
     let mut layout = check_ops([Op::AddOutput(1)]);
-    for (id, width) in [(1, 320), (2, 540), (3, 280)] {
+    for id in 1..=9 {
         Op::AddWindow {
             params: TestWindowParams::new(id),
         }
         .apply(&mut layout);
-        layout.set_window_width(Some(&id), SizeChange::SetFixed(width));
-        layout.set_window_height(Some(&id), SizeChange::SetFixed(240));
+        layout.set_window_width(Some(&id), SizeChange::SetFixed(320));
+        layout.set_window_height(Some(&id), SizeChange::SetFixed(180));
         Op::Communicate(id).apply(&mut layout);
         layout.refresh(true);
     }
-    Op::CompleteAnimations.apply(&mut layout);
-    let sizes = ipc_rectangles(&layout);
+    position_contact(&mut layout, 4, 1, false);
+    position_contact(&mut layout, 7, 4, false);
+    for (source, target) in [(2, 1), (3, 2), (5, 4), (6, 5), (8, 7), (9, 8)] {
+        position_contact(&mut layout, source, target, true);
+    }
+    layout
+}
 
-    layout.activate_window(&1);
-    layout.move_right();
-    Op::CompleteAnimations.apply(&mut layout);
-    let right = ipc_rectangles(&layout);
-    assert_eq!(right[&2].loc.x + right[&2].size.w + gap, right[&1].loc.x);
-    layout.move_left();
-    Op::CompleteAnimations.apply(&mut layout);
-    assert_eq!(ipc_rectangles(&layout), sizes);
+fn assert_w4_resize_isolated(
+    before: &std::collections::BTreeMap<usize, Rectangle<f64, Logical>>,
+    after: &std::collections::BTreeMap<usize, Rectangle<f64, Logical>>,
+) {
+    for id in [1, 2, 3, 5, 6, 7, 8, 9] {
+        assert_eq!(after[&id].size, before[&id].size);
+    }
+    for id in [1, 2, 3, 5, 6, 8, 9] {
+        assert_eq!(
+            after[&id].loc - after[&4].loc,
+            before[&id].loc - before[&4].loc
+        );
+    }
+    assert_ne!(
+        after[&7].loc - after[&4].loc,
+        before[&7].loc - before[&4].loc
+    );
 }
 
 #[test]
-fn stacked_unequal_columns_and_tiles_move_with_axis_only_mirrors() {
-    let gap = Options::default().layout.gaps;
-    let mut layout = check_ops([Op::AddOutput(1)]);
-    for (id, width, height) in [(4, 1000, 80), (5, 1000, 120), (7, 1700, 95)] {
-        Op::AddWindow {
-            params: TestWindowParams::new(id),
-        }
-        .apply(&mut layout);
-        layout.set_window_width(Some(&id), SizeChange::SetFixed(width));
-        layout.set_window_height(Some(&id), SizeChange::SetFixed(height));
-        Op::Communicate(id).apply(&mut layout);
-        layout.refresh(true);
-        if !matches!(id, 4 | 7) {
-            layout.consume_or_expel_window_left(None);
-        }
-    }
-    Op::CompleteAnimations.apply(&mut layout);
+fn singleton_grid_moves_and_resizes_independently() {
+    let mut layout = singleton_grid_fixture();
     layout.activate_window(&4);
     Op::CompleteAnimations.apply(&mut layout);
-    let column_x = ipc_rectangles(&layout)[&4].loc.x;
-    let assert_centered = |layout: &Layout<TestWindow>, id| {
-        let rectangle = ipc_rectangles(layout)[&id];
-        assert_eq!(rectangle.loc.x, column_x);
-        assert!((rectangle.loc.y + rectangle.size.h / 2. - 360.).abs() < 1.);
-    };
-    layout.activate_window(&5);
-    Op::CompleteAnimations.apply(&mut layout);
-    assert_centered(&layout, 5);
-    layout.focus_up();
-    Op::CompleteAnimations.apply(&mut layout);
-    assert_centered(&layout, 4);
     let before = ipc_rectangles(&layout);
-
     layout.move_right();
-    Op::CompleteAnimations.apply(&mut layout);
-    let right = ipc_rectangles(&layout);
-    assert_eq!(right[&4].loc.x - right[&7].loc.x, before[&7].size.w + gap);
-    for id in [4, 5, 7] {
-        assert_eq!(right[&id].loc.y, before[&id].loc.y);
-    }
     layout.move_left();
-    Op::CompleteAnimations.apply(&mut layout);
-    assert_eq!(ipc_rectangles(&layout), before);
-
     layout.move_down();
-    Op::CompleteAnimations.apply(&mut layout);
-    let down = ipc_rectangles(&layout);
-    assert_eq!(down[&4].loc.y - down[&5].loc.y, before[&5].size.h + gap);
-    for id in [4, 5, 7] {
-        assert_eq!(down[&id].loc.x, before[&id].loc.x);
-    }
     layout.move_up();
     Op::CompleteAnimations.apply(&mut layout);
     assert_eq!(ipc_rectangles(&layout), before);
+    layout.set_window_width(Some(&4), SizeChange::AdjustFixed(120));
+    Op::Communicate(4).apply(&mut layout);
+    layout.refresh(true);
+    Op::CompleteAnimations.apply(&mut layout);
+    assert_w4_resize_isolated(&before, &ipc_rectangles(&layout));
+}
+
+#[test]
+fn singleton_grid_interactive_resize_is_independent() {
+    let mut layout = singleton_grid_fixture();
+    layout.activate_window(&4);
+    Op::CompleteAnimations.apply(&mut layout);
+    let before = ipc_rectangles(&layout);
+    layout.interactive_resize_begin(4, ResizeEdge::RIGHT);
+    layout.interactive_resize_update(&4, Point::from((120., 0.)));
+    Op::Communicate(4).apply(&mut layout);
+    layout.refresh(true);
+    layout.interactive_resize_end(&4);
+    Op::CompleteAnimations.apply(&mut layout);
+    assert_w4_resize_isolated(&before, &ipc_rectangles(&layout));
+}
+
+#[test]
+fn consume_paths_do_not_create_shared_width_columns() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+    ]);
+    layout.consume_or_expel_window_left(None);
+    layout.consume_into_column();
+    let scrolling = layout.active_workspace().unwrap().scrolling();
+    assert!(scrolling
+        .columns()
+        .all(|column| column.tiles().count() == 1));
 }
 
 #[test]

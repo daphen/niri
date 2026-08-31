@@ -4280,6 +4280,9 @@ impl<W: LayoutElement> Layout<W> {
                             true,
                             allow_to_activate_workspace,
                         );
+                        if let Some(pointer) = contact_pos {
+                            mon.workspaces[ws_idx].snap_tiled_window_to_contact(&win_id, pointer);
+                        }
                     }
                     InsertPosition::Floating => {
                         let mut tile = move_.tile;

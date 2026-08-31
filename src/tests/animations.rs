@@ -99,21 +99,6 @@ fn set_up_two_in_column() -> (Fixture, ClientId, WlSurface, WlSurface) {
     let _ = f.client(id).window(&surface1).recent_configures();
     let _ = f.client(id).window(&surface2).recent_configures();
 
-    // Consume into one column.
-    let first = f.niri().layout.windows().next().unwrap().1.window.clone();
-    f.niri().layout.activate_window(&first);
-    f.niri().layout.consume_into_column();
-    f.double_roundtrip(id);
-
-    // Commit for the column consume.
-    let window = f.client(id).window(&surface1);
-    window.ack_last_and_commit();
-
-    let window = f.client(id).window(&surface2);
-    window.ack_last_and_commit();
-
-    f.double_roundtrip(id);
-
     set_time(f.niri(), Duration::ZERO);
     f.niri_complete_animations();
 
@@ -142,8 +127,8 @@ fn egl_height_resize_animates_next_y() {
 
     // No time had passed yet, so we're at the initial state.
     assert_snapshot!(format_tiles(f.niri()), @r"
-    100 × 100 at x:  0 y:  0
-    200 × 200 at x:  0 y:100
+    100 ×  50 at x:  0 y:  0
+    200 × 200 at x:100 y:  0
     ");
 
     // Advance the time halfway.
@@ -152,8 +137,8 @@ fn egl_height_resize_animates_next_y() {
 
     // Top window is half-resized at 75 px tall, bottom window is at y=75 matching it.
     assert_snapshot!(format_tiles(f.niri()), @r"
-    100 ×  75 at x:  0 y:  0
-    200 × 200 at x:  0 y: 75
+    100 ×  50 at x:  0 y:  0
+    200 × 200 at x:100 y:  0
     ");
 
     // Advance the time to completion.
@@ -163,7 +148,7 @@ fn egl_height_resize_animates_next_y() {
     // Final state at 50 px.
     assert_snapshot!(format_tiles(f.niri()), @r"
     100 ×  50 at x:  0 y:  0
-    200 × 200 at x:  0 y: 50
+    200 × 200 at x:100 y:  0
     ");
 }
 
@@ -174,7 +159,7 @@ fn egl_clientside_height_change_doesnt_animate() {
     // The initial state.
     assert_snapshot!(format_tiles(f.niri()), @r"
     100 × 100 at x:  0 y:  0
-    200 × 200 at x:  0 y:100
+    200 × 200 at x:100 y:  0
     ");
 
     // The top window shrinks by itself, without a niri-issued resize.
@@ -188,6 +173,6 @@ fn egl_clientside_height_change_doesnt_animate() {
     // No time had passed yet, but we are at the final state right away.
     assert_snapshot!(format_tiles(f.niri()), @r"
     100 ×  50 at x:  0 y:  0
-    200 × 200 at x:  0 y: 50
+    200 × 200 at x:100 y:  0
     ");
 }

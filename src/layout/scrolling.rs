@@ -1098,56 +1098,12 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     pub fn add_tile_to_column(
         &mut self,
         col_idx: usize,
-        tile_idx: Option<usize>,
+        _tile_idx: Option<usize>,
         tile: Tile<W>,
         activate: bool,
     ) {
-        let prev_next_x = self.column_x(col_idx + 1);
-
-        let target_column = &mut self.columns[col_idx];
-        let tile_idx = tile_idx.unwrap_or(target_column.tiles.len());
-        let mut prev_active_tile_idx = target_column.active_tile_idx;
-
-        target_column.add_tile_at(tile_idx, tile);
-        self.data[col_idx].update(target_column);
-
-        if tile_idx <= prev_active_tile_idx {
-            target_column.active_tile_idx += 1;
-            prev_active_tile_idx += 1;
-        }
-
-        if activate {
-            target_column.activate_idx(tile_idx);
-            if self.active_column_idx != col_idx {
-                self.activate_column(col_idx);
-            }
-        }
-
-        let target_column = &mut self.columns[col_idx];
-        if target_column.display_mode == ColumnDisplay::Tabbed {
-            if target_column.active_tile_idx == tile_idx {
-                // Fade out the previously active tile.
-                let tile = &mut target_column.tiles[prev_active_tile_idx];
-                tile.animate_alpha(1., 0., self.options.animations.window_movement.0);
-            } else {
-                // Fade out when adding into a tabbed column into the background.
-                let tile = &mut target_column.tiles[tile_idx];
-                tile.animate_alpha(1., 0., self.options.animations.window_movement.0);
-            }
-        }
-
-        // Adding a wider window into a column increases its width now (even if the window will
-        // shrink later). Move the columns to account for this.
-        let offset = self.column_x(col_idx + 1) - prev_next_x;
-        if self.active_column_idx <= col_idx {
-            for col in &mut self.columns[col_idx + 1..] {
-                col.animate_move_x_from(-offset);
-            }
-        } else {
-            for col in &mut self.columns[..=col_idx] {
-                col.animate_move_x_from(offset);
-            }
-        }
+        let width = self.columns[col_idx].width;
+        self.add_tile(Some(col_idx + 1), tile, activate, width, false, None);
     }
 
     pub fn add_tile_right_of(
@@ -2180,84 +2136,6 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         };
         let (current_column, current_tile) = locate(&current);
         let (target_column, target_tile) = locate(&target);
-        let horizontal = matches!(
-            direction,
-            navigation::Direction::Left | navigation::Direction::Right
-        );
-
-        if horizontal
-            && current_column != target_column
-            && (self.columns[current_column].tiles.len() != 1
-                || self.columns[target_column].tiles.len() != 1)
-        {
-            let gap = self.options.layout.gaps;
-            let current_position = self.data[current_column].position;
-            let target_position = self.data[target_column].position;
-            let current_width = self.data[current_column].width;
-            let target_width = self.data[target_column].width;
-            let (next_current_x, next_target_x) = match direction {
-                navigation::Direction::Left => {
-                    (target_position.x, target_position.x + current_width + gap)
-                }
-                navigation::Direction::Right => {
-                    (current_position.x + target_width + gap, current_position.x)
-                }
-                _ => unreachable!(),
-            };
-            if current_column.abs_diff(target_column) != 1
-                || self.columns[current_column].tiles[current_tile]
-                    .tile_size()
-                    .w
-                    != current_width
-                || self.columns[target_column].tiles[target_tile].tile_size().w != target_width
-            {
-                return false;
-            }
-
-            self.data[current_column].position.x = next_current_x;
-            self.data[target_column].position.x = next_target_x;
-            self.columns[current_column].animate_move_x_from(current_position.x - next_current_x);
-            self.columns[target_column].animate_move_x_from(target_position.x - next_target_x);
-            self.columns.swap(current_column, target_column);
-            self.data.swap(current_column, target_column);
-            self.placement.remember(&self.spatial_items());
-            self.activate_column_with_anim_config(
-                target_column,
-                self.options.animations.window_movement.0,
-            );
-            return true;
-        }
-
-        if !horizontal && current_column == target_column {
-            let column_position = self.data[current_column].position;
-            let current_rendered = column_position
-                + self.columns[current_column].tile_offset(current_tile)
-                + self.columns[current_column].tiles[current_tile].render_offset();
-            let target_rendered = column_position
-                + self.columns[current_column].tile_offset(target_tile)
-                + self.columns[current_column].tiles[target_tile].render_offset();
-            let column = &mut self.columns[current_column];
-            column.tiles.swap(current_tile, target_tile);
-            column.data.swap(current_tile, target_tile);
-            column.active_tile_idx = target_tile;
-            let current_position = column_position + column.tile_offset(target_tile);
-            let target_position = column_position + column.tile_offset(current_tile);
-            column.tiles[target_tile].stop_move_animations();
-            column.tiles[target_tile].animate_move_from(current_rendered - current_position);
-            column.tiles[current_tile].stop_move_animations();
-            column.tiles[current_tile].animate_move_from(target_rendered - target_position);
-            self.placement.remember(&self.spatial_items());
-            let config = self.options.animations.window_movement.0;
-            self.animate_view_offset_to_column_with_config(
-                None,
-                current_column,
-                Some(current_column),
-                config,
-            );
-            self.animate_view_y_to_tile(current_column, target_tile, config);
-            return true;
-        }
-
         if self.columns[current_column].tiles.len() != 1
             || self.columns[target_column].tiles.len() != 1
         {
@@ -2404,6 +2282,10 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             (source_col_idx, source_tile_idx)
         };
 
+        if self.columns[source_col_idx].tiles.len() == 1 {
+            return;
+        }
+
         let source_column = &self.columns[source_col_idx];
         let prev_off = source_column.tile_offset(source_tile_idx);
 
@@ -2512,6 +2394,10 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             (source_col_idx, source_tile_idx)
         };
 
+        if self.columns[source_col_idx].tiles.len() == 1 {
+            return;
+        }
+
         let cur_x = self.column_x(source_col_idx);
 
         let source_column = &self.columns[source_col_idx];
@@ -2582,33 +2468,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         }
     }
 
-    pub fn consume_into_column(&mut self) {
-        if self.columns.len() < 2 {
-            return;
-        }
-
-        if self.active_column_idx == self.columns.len() - 1 {
-            return;
-        }
-
-        let target_column_idx = self.active_column_idx;
-        let source_column_idx = self.active_column_idx + 1;
-
-        let mut offset = self.columns[source_column_idx].render_offset();
-        offset.x += self.column_x(source_column_idx);
-        offset.x -= self.column_x(target_column_idx);
-        let prev_off = self.columns[source_column_idx].tile_offset(0);
-
-        let removed = self.remove_tile_by_idx(source_column_idx, 0, Transaction::new(), None);
-        self.add_tile_to_column(target_column_idx, None, removed.tile, false);
-
-        let target_column = &mut self.columns[target_column_idx];
-        offset += prev_off - target_column.tile_offset(target_column.tiles.len() - 1);
-        offset -= target_column.render_offset();
-
-        let new_tile = target_column.tiles.last_mut().unwrap();
-        new_tile.animate_move_from(offset);
-    }
+    pub fn consume_into_column(&mut self) {}
 
     pub fn expel_from_column(&mut self) {
         if self.columns.is_empty() {
