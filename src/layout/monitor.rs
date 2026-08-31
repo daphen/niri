@@ -28,9 +28,7 @@ use crate::render_helpers::xray::XrayPos;
 use crate::render_helpers::RenderCtx;
 use crate::rubber_band::RubberBand;
 use crate::utils::transaction::Transaction;
-use crate::utils::{
-    output_size, round_logical_in_physical, round_logical_in_physical_max1, ResizeEdge,
-};
+use crate::utils::{output_size, round_logical_in_physical, ResizeEdge};
 
 /// Amount of touchpad movement to scroll the height of one workspace.
 const WORKSPACE_GESTURE_MOVEMENT: f64 = 300.;
@@ -1359,10 +1357,8 @@ impl<W: LayoutElement> Monitor<W> {
         ws_size.to_physical_precise_ceil(scale).to_logical(scale)
     }
 
-    fn workspace_gap(&self, zoom: f64) -> f64 {
-        let scale = self.scale.fractional_scale();
-        let gap = self.view_size.h * 0.1 * zoom;
-        round_logical_in_physical_max1(scale, gap)
+    fn workspace_gap(&self, _zoom: f64) -> f64 {
+        0.
     }
 
     fn workspace_size_with_gap(&self, zoom: f64) -> Size<f64, Logical> {

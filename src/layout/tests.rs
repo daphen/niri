@@ -3698,6 +3698,56 @@ fn expel_pending_left_from_fullscreen_tabbed_column() {
 }
 
 #[test]
+fn adjacent_workspaces_have_zero_gap_in_overview() {
+    let layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::MoveWindowToWorkspaceDown(true),
+        Op::ToggleOverview,
+        Op::CompleteAnimations,
+    ]);
+
+    let MonitorSet::Normal { monitors, .. } = &layout.monitor_set else {
+        unreachable!()
+    };
+    let geos: Vec<_> = monitors[0]
+        .workspaces_with_render_geo()
+        .map(|(_, geo)| geo)
+        .collect();
+
+    assert!(geos.len() >= 2);
+    assert_eq!(geos[0].loc.y + geos[0].size.h, geos[1].loc.y);
+}
+
+#[test]
+fn full_height_window_centers_in_effective_working_area() {
+    for gap in [0., 4.] {
+        let mut options = Options::default();
+        options.layout.gaps = gap;
+        options.layout.struts.bottom = FloatOrInt(50.);
+        let mut layout = check_ops_with_options(options, [Op::AddOutput(1)]);
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        }
+        .apply(&mut layout);
+        layout.set_window_height(Some(&1), SizeChange::SetProportion(100.));
+        Op::Communicate(1).apply(&mut layout);
+        layout.refresh(true);
+        Op::CompleteAnimations.apply(&mut layout);
+
+        let scrolling = layout.active_workspace().unwrap().scrolling();
+        let (tile, pos, _) = scrolling.tiles_with_render_positions().next().unwrap();
+        assert_eq!(pos.y, gap);
+        assert_eq!(720. - pos.y - tile.tile_size().h, 50. + gap);
+    }
+}
+
+#[test]
 fn workspace_render_geo_at_fractional_scale() {
     let ops = [
         Op::AddScaledOutput {
