@@ -910,6 +910,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             // During a DnD scroll, animate even when activating the same window, for DnD hold.
             && (self.columns.is_empty() || !self.view_offset.is_dnd_scroll())
         {
+            self.animate_view_y_to_tile(idx, self.columns[idx].active_tile_idx, config);
             return;
         }
 
