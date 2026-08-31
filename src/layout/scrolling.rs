@@ -847,8 +847,9 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     ) {
         let (_, tile_offset) = self.columns[column_idx].tiles().nth(tile_idx).unwrap();
         let tile = &self.columns[column_idx].tiles[tile_idx];
+        let working_center = self.working_area.loc.y + self.working_area.size.h / 2.;
         let target = self.data[column_idx].position.y + tile_offset.y + tile.tile_size().h / 2.
-            - self.view_size.h / 2.;
+            - working_center;
         if (target - self.view_y_offset.target()).abs() < 1. / self.scale {
             self.view_y_offset
                 .offset(target - self.view_y_offset.target());
@@ -2076,6 +2077,162 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         self.activate_column_with_anim_config(new_idx, self.options.animations.window_movement.0);
     }
 
+    fn admit_vertical_spatial_move(
+        &mut self,
+        current: W::Id,
+        direction: navigation::Direction,
+    ) -> bool {
+        if !matches!(
+            direction,
+            navigation::Direction::Up | navigation::Direction::Down
+        ) {
+            return false;
+        }
+        let tiles = self.spatial_tiles();
+        let Some((current_column, current_tile)) =
+            self.columns
+                .iter()
+                .enumerate()
+                .find_map(|(column_idx, column)| {
+                    column
+                        .position(&current)
+                        .map(|tile_idx| (column_idx, tile_idx))
+                })
+        else {
+            return false;
+        };
+        if self.columns[current_column].tiles.len() != 1 {
+            return false;
+        }
+        let current_rectangle = tiles
+            .iter()
+            .find_map(|(id, rectangle, _)| (id == &current).then_some(*rectangle))
+            .unwrap();
+        let survivors = tiles
+            .iter()
+            .filter(|(id, _, _)| id != &current)
+            .collect::<Vec<_>>();
+        if survivors.is_empty() {
+            return false;
+        }
+        let gap = self.options.layout.gaps;
+        let contacts = |a, b| {
+            [
+                navigation::Direction::Left,
+                navigation::Direction::Right,
+                navigation::Direction::Up,
+                navigation::Direction::Down,
+            ]
+            .into_iter()
+            .any(|direction| navigation::strict_contact(a, b, direction, gap))
+        };
+        let separated = |a: Rectangle<f64, Logical>, b: Rectangle<f64, Logical>| {
+            a.loc.x >= b.loc.x + b.size.w + gap
+                || b.loc.x >= a.loc.x + a.size.w + gap
+                || a.loc.y >= b.loc.y + b.size.h + gap
+                || b.loc.y >= a.loc.y + a.size.h + gap
+        };
+        let mut best = None;
+        for target_idx in 0..survivors.len() {
+            let mut component = vec![target_idx];
+            let mut next = 0;
+            while next < component.len() {
+                for idx in 0..survivors.len() {
+                    if !component.contains(&idx)
+                        && contacts(survivors[component[next]].1, survivors[idx].1)
+                    {
+                        component.push(idx);
+                    }
+                }
+                next += 1;
+            }
+            let target = survivors[target_idx].1;
+            let delta = Point::from((current_rectangle.loc.x - target.loc.x, 0.));
+            let moved_target = Rectangle::new(target.loc + delta, target.size);
+            let y = match direction {
+                navigation::Direction::Up => moved_target.loc.y - current_rectangle.size.h - gap,
+                navigation::Direction::Down => moved_target.loc.y + moved_target.size.h + gap,
+                _ => unreachable!(),
+            };
+            let position = Point::from((current_rectangle.loc.x, y));
+            let rectangles = std::iter::once(Rectangle::new(position, current_rectangle.size))
+                .chain(
+                    survivors
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, (_, rectangle, _))| {
+                            if component.contains(&idx) {
+                                Rectangle::new(rectangle.loc + delta, rectangle.size)
+                            } else {
+                                *rectangle
+                            }
+                        }),
+                )
+                .collect::<Vec<_>>();
+            let valid = rectangles.iter().enumerate().all(|(idx, rectangle)| {
+                rectangles
+                    .iter()
+                    .skip(idx + 1)
+                    .all(|other| separated(*rectangle, *other))
+            });
+            if !valid {
+                continue;
+            }
+            let mut connected = vec![0];
+            let mut next = 0;
+            while next < connected.len() {
+                for idx in 0..rectangles.len() {
+                    if !connected.contains(&idx)
+                        && contacts(rectangles[connected[next]], rectangles[idx])
+                    {
+                        connected.push(idx);
+                    }
+                }
+                next += 1;
+            }
+            if connected.len() != rectangles.len() {
+                continue;
+            }
+            let distance = delta.x.abs() + (y - current_rectangle.loc.y).abs();
+            if best.as_ref().is_none_or(|(old, _, _, _)| distance < *old) {
+                best = Some((distance, position, component, delta));
+            }
+        }
+        let Some((_, position, component, delta)) = best else {
+            return false;
+        };
+        for idx in component {
+            let id = &survivors[idx].0;
+            let column_idx = self
+                .columns
+                .iter()
+                .position(|column| column.contains(id))
+                .unwrap();
+            let rendered =
+                self.data[column_idx].position + self.columns[column_idx].render_offset();
+            self.data[column_idx].position += delta;
+            self.columns[column_idx].move_x_animation = None;
+            self.columns[column_idx].move_y_animation = None;
+            self.columns[column_idx].animate_move_from(rendered - self.data[column_idx].position);
+        }
+        let rendered =
+            self.data[current_column].position + self.columns[current_column].render_offset();
+        let tile_offset = self.columns[current_column].tile_offset(current_tile);
+        self.data[current_column].position = position - tile_offset;
+        self.columns[current_column].move_x_animation = None;
+        self.columns[current_column].move_y_animation = None;
+        self.columns[current_column]
+            .animate_move_from(rendered - self.data[current_column].position);
+        self.placement.remember(&self.spatial_items());
+        self.animate_view_offset_to_column(None, current_column, Some(current_column));
+        self.animate_view_y_to_tile(
+            current_column,
+            current_tile,
+            self.options.animations.horizontal_view_movement.0,
+        );
+        true
+    }
+
     fn move_spatial(&mut self, direction: navigation::Direction) -> bool {
         let Some(current) = self.active_window().map(|window| window.id().clone()) else {
             return false;
@@ -2084,7 +2241,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         let Some(target) =
             navigation::nearest_contact(&current, direction, &tiles, self.options.layout.gaps)
         else {
-            return false;
+            return self.admit_vertical_spatial_move(current, direction);
         };
         let locate = |id: &W::Id| {
             self.columns

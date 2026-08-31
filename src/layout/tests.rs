@@ -2646,6 +2646,30 @@ fn singleton_grid_moves_and_resizes_independently() {
 }
 
 #[test]
+fn spatial_vertical_snap_centers_in_working_area() {
+    for gap in [0., 4.] {
+        let mut options = Options::default();
+        options.layout.gaps = gap;
+        options.layout.struts.bottom = FloatOrInt(50.);
+        let mut layout = check_ops_with_options(options, [Op::AddOutput(1)]);
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        }
+        .apply(&mut layout);
+        layout.set_window_height(Some(&1), SizeChange::SetProportion(100.));
+        Op::Communicate(1).apply(&mut layout);
+        layout.refresh(true);
+        Op::CompleteAnimations.apply(&mut layout);
+        let rectangle = ipc_rectangles(&layout)[&1];
+        assert_eq!(rectangle.loc.y.round(), gap);
+        assert_eq!(
+            (720. - rectangle.loc.y - rectangle.size.h).round(),
+            50. + gap
+        );
+    }
+}
+
+#[test]
 fn singleton_grid_interactive_resize_is_independent() {
     let mut layout = singleton_grid_fixture();
     layout.activate_window(&4);
@@ -2680,14 +2704,63 @@ fn consume_paths_do_not_create_shared_width_columns() {
 }
 
 #[test]
+fn fresh_row_keyboard_admits_first_vertical_contact() {
+    let gap = Options::default().layout.gaps;
+    for (focused, target, down) in [(1, 2, true), (4, 3, true), (1, 2, false), (4, 3, false)] {
+        let mut layout = check_ops([Op::AddOutput(1)]);
+        for id in 1..=4 {
+            Op::AddWindow {
+                params: TestWindowParams::new(id),
+            }
+            .apply(&mut layout);
+        }
+        layout.activate_window(&focused);
+        Op::CompleteAnimations.apply(&mut layout);
+        let before = ipc_rectangles(&layout);
+        if down {
+            layout.move_down();
+        } else {
+            layout.move_up();
+        }
+        Op::CompleteAnimations.apply(&mut layout);
+        let after = ipc_rectangles(&layout);
+        let survivor = if focused == 1 { 2 } else { 1 };
+        for id in (1..=4).filter(|id| *id != focused) {
+            assert_eq!(after[&id].size, before[&id].size);
+            assert_eq!(
+                after[&id].loc - after[&survivor].loc,
+                before[&id].loc - before[&survivor].loc
+            );
+        }
+        assert_eq!(after[&focused].size, before[&focused].size);
+        let survivor_delta = before[&focused].loc.x - before[&target].loc.x;
+        let camera_delta = after[&target].loc.x - before[&target].loc.x - survivor_delta;
+        assert_eq!(after[&focused].loc.x - before[&focused].loc.x, camera_delta);
+        assert_eq!(after[&focused].loc.x, after[&target].loc.x);
+        let vertical_gap = if down {
+            after[&focused].loc.y - after[&target].loc.y - after[&target].size.h
+        } else {
+            after[&target].loc.y - after[&focused].loc.y - after[&focused].size.h
+        };
+        assert_eq!(vertical_gap, gap);
+        for a in 1..=4 {
+            for b in a + 1..=4 {
+                let a = after[&a];
+                let b = after[&b];
+                let overlap_x = (a.loc.x + a.size.w).min(b.loc.x + b.size.w) - a.loc.x.max(b.loc.x);
+                let overlap_y = (a.loc.y + a.size.h).min(b.loc.y + b.size.h) - a.loc.y.max(b.loc.y);
+                assert!(overlap_x <= 0. || overlap_y <= 0.);
+            }
+        }
+    }
+}
+
+#[test]
 fn invalid_directional_move_is_a_complete_noop() {
     let mut layout = check_ops([
         Op::AddOutput(1),
         Op::AddWindow {
             params: TestWindowParams::new(1),
-        },
-        Op::AddWindow {
-            params: TestWindowParams::new(2),
         },
     ]);
     layout.activate_window(&1);
