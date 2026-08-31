@@ -64,6 +64,7 @@ impl State {
         }) {
             let position = changed.current.unwrap_or_default();
             let resized = Rectangle::new(position, changed.size);
+            let old_size = self.items.iter().find(|old| old.0 == changed.id).unwrap().2;
             let reserved: Vec<_> = items
                 .iter()
                 .filter(|item| item.id != changed.id)
@@ -83,12 +84,22 @@ impl State {
                             .filter_map(|(id, rect)| (id != &item.id).then_some(*rect))
                             .chain([resized])
                             .collect();
-                        nearest_free(current, item.size, gap, &occupied)
+                        let right = Point::from((resized.loc.x + resized.size.w + gap, current.y));
+                        let left = Point::from((resized.loc.x - item.size.w - gap, current.y));
+                        let down = Point::from((current.x, resized.loc.y + resized.size.h + gap));
+                        let up = Point::from((current.x, resized.loc.y - item.size.h - gap));
+                        let contacts = if old_size.w != changed.size.w {
+                            [right, down, up, left]
+                        } else {
+                            [down, up, right, left]
+                        };
+                        contacts
+                            .into_iter()
+                            .find(|point| free(Rectangle::new(*point, item.size), 0., &occupied))
+                            .unwrap_or_else(|| nearest_free(current, item.size, gap, &occupied))
                     };
-                    Target {
-                        id: item.id,
-                        position,
-                    }
+                    let id = item.id;
+                    Target { id, position }
                 })
                 .collect();
             self.remember(items);

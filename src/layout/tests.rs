@@ -2626,6 +2626,23 @@ fn singleton_grid_moves_and_resizes_independently() {
     layout.refresh(true);
     Op::CompleteAnimations.apply(&mut layout);
     assert_w4_resize_isolated(&before, &ipc_rectangles(&layout));
+
+    position_contact(&mut layout, 5, 4, false);
+    position_contact(&mut layout, 6, 5, false);
+    layout.set_window_width(Some(&4), SizeChange::AdjustFixed(500));
+    Op::Communicate(4).apply(&mut layout);
+    layout.refresh(true);
+    Op::CompleteAnimations.apply(&mut layout);
+    let rectangles = rendered_rectangles(&layout);
+    let current = rectangles[&4];
+    let displaced = rectangles[&5];
+    let vertical_gap = (displaced.loc.y - current.loc.y - current.size.h)
+        .max(current.loc.y - displaced.loc.y - displaced.size.h);
+    let horizontal_gap = before[&4].loc.x - before[&1].loc.x - before[&1].size.w;
+    assert!(
+        (horizontal_gap - vertical_gap).abs() <= 1.
+            && (vertical_gap - layout.options.layout.gaps).abs() <= 1.
+    );
 }
 
 #[test]

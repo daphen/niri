@@ -480,7 +480,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             .map(|(order, (column, data))| {
                 let height = column
                     .tiles()
-                    .map(|(tile, offset)| offset.y + tile.tile_size().h)
+                    .map(|(tile, _)| tile.tile_size().h)
                     .fold(0., f64::max);
                 placement::Item {
                     id: column.id,
