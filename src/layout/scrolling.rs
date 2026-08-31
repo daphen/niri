@@ -486,7 +486,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                     id: column.id,
                     app_id: column.tiles[0].window().app_id(),
                     order: order as u64,
-                    size: Size::from((data.width, height)),
+                    size: Size::from((column.tiles[0].tile_size().w, height)),
                     current: Some(data.position),
                 }
             })

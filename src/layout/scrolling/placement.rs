@@ -61,6 +61,10 @@ impl State {
             let position = changed.current.unwrap_or_default();
             let resized = Rectangle::new(position, changed.size);
             let old_size = self.items.iter().find(|old| old.0 == changed.id).unwrap().2;
+            if let Some(targets) = preserve_resize_contacts(items, changed, old_size, gap) {
+                self.remember(items);
+                return targets;
+            }
             let reserved: Vec<_> = items
                 .iter()
                 .filter(|item| item.id != changed.id)
@@ -132,6 +136,100 @@ impl State {
             .collect();
         targets
     }
+}
+
+fn preserve_resize_contacts(
+    items: &[Item],
+    changed: &Item,
+    old_size: Size<f64, Logical>,
+    gap: f64,
+) -> Option<Vec<Target>> {
+    let old = Rectangle::new(changed.current?, old_size);
+    let delta: Point<f64, Logical> =
+        Point::from((changed.size.w - old_size.w, changed.size.h - old_size.h));
+    let others = items
+        .iter()
+        .filter(|item| item.id != changed.id)
+        .collect::<Vec<_>>();
+    let rectangles = others
+        .iter()
+        .map(|item| Rectangle::new(item.current.unwrap(), item.size))
+        .collect::<Vec<_>>();
+    let contact = |a: Rectangle<f64, Logical>, b: Rectangle<f64, Logical>| {
+        let overlap_x = (a.loc.x + a.size.w).min(b.loc.x + b.size.w) - a.loc.x.max(b.loc.x);
+        let overlap_y = (a.loc.y + a.size.h).min(b.loc.y + b.size.h) - a.loc.y.max(b.loc.y);
+        (overlap_y > 0.
+            && ((b.loc.x - a.loc.x - a.size.w - gap).abs() < 0.001
+                || (a.loc.x - b.loc.x - b.size.w - gap).abs() < 0.001))
+            || (overlap_x > 0.
+                && ((b.loc.y - a.loc.y - a.size.h - gap).abs() < 0.001
+                    || (a.loc.y - b.loc.y - b.size.h - gap).abs() < 0.001))
+    };
+    let mut shifts = vec![Point::default(); others.len()];
+    let mut affected = false;
+    for seed in 0..others.len() {
+        let right = delta.x != 0.
+            && (rectangles[seed].loc.x - old.loc.x - old.size.w - gap).abs() < 0.001
+            && (old.loc.y + old.size.h).min(rectangles[seed].loc.y + rectangles[seed].size.h)
+                > old.loc.y.max(rectangles[seed].loc.y);
+        let down = delta.y != 0.
+            && (rectangles[seed].loc.y - old.loc.y - old.size.h - gap).abs() < 0.001
+            && (old.loc.x + old.size.w).min(rectangles[seed].loc.x + rectangles[seed].size.w)
+                > old.loc.x.max(rectangles[seed].loc.x);
+        if !right && !down {
+            continue;
+        }
+        affected = true;
+        let mut component = vec![seed];
+        let mut next = 0;
+        while next < component.len() {
+            for idx in 0..others.len() {
+                if !component.contains(&idx)
+                    && contact(rectangles[component[next]], rectangles[idx])
+                {
+                    component.push(idx);
+                }
+            }
+            next += 1;
+        }
+        for idx in component {
+            if right {
+                shifts[idx].x = delta.x;
+            }
+            if down {
+                shifts[idx].y = delta.y;
+            }
+        }
+    }
+    if !affected {
+        return None;
+    }
+    let targets = items
+        .iter()
+        .map(|item| {
+            let shift = others
+                .iter()
+                .position(|other| other.id == item.id)
+                .map(|idx| shifts[idx])
+                .unwrap_or_default();
+            Target {
+                id: item.id,
+                position: item.current.unwrap() + shift,
+            }
+        })
+        .collect::<Vec<_>>();
+    let placed = items
+        .iter()
+        .map(|item| {
+            let target = targets.iter().find(|target| target.id == item.id).unwrap();
+            Rectangle::new(target.position, item.size)
+        })
+        .collect::<Vec<_>>();
+    placed
+        .iter()
+        .enumerate()
+        .all(|(idx, rectangle)| free(*rectangle, gap, &placed[idx + 1..]))
+        .then_some(targets)
 }
 
 fn nearest_free(

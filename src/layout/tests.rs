@@ -2597,10 +2597,11 @@ fn assert_w4_resize_isolated(
     for id in [1, 2, 3, 5, 6, 7, 8, 9] {
         assert_eq!(after[&id].size, before[&id].size);
     }
-    for id in [1, 2, 3, 5, 6, 8, 9] {
+    for id in [2, 3, 5, 6, 7, 8, 9] {
         assert_eq!(
-            after[&id].loc - after[&4].loc,
-            before[&id].loc - before[&4].loc
+            after[&id].loc - after[&1].loc,
+            before[&id].loc - before[&1].loc,
+            "id={id}"
         );
     }
     assert_ne!(
@@ -2665,6 +2666,70 @@ fn spatial_vertical_snap_centers_in_working_area() {
         assert_eq!(
             (720. - rectangle.loc.y - rectangle.size.h).round(),
             50. + gap
+        );
+    }
+}
+
+#[test]
+fn gap_four_shrink_preserves_right_component_contact() {
+    for interactive in [false, true] {
+        let mut options = Options::default();
+        options.layout.gaps = 4.;
+        let mut layout = check_ops_with_options(options, [Op::AddOutput(1)]);
+        for (id, width, height) in [(1, 1508, 800), (2, 1200, 900), (3, 1600, 1100)] {
+            Op::AddWindow {
+                params: TestWindowParams::new(id),
+            }
+            .apply(&mut layout);
+            layout.set_window_width(Some(&id), SizeChange::SetFixed(width));
+            layout.set_window_height(Some(&id), SizeChange::SetFixed(height));
+            Op::Communicate(id).apply(&mut layout);
+            layout.refresh(true);
+        }
+        layout.activate_window(&1);
+        Op::CompleteAnimations.apply(&mut layout);
+        let before = ipc_rectangles(&layout);
+        if interactive {
+            layout.interactive_resize_begin(1, ResizeEdge::RIGHT);
+            layout.interactive_resize_update(&1, Point::from((-112., 0.)));
+            Op::Communicate(1).apply(&mut layout);
+            layout.refresh(true);
+            layout.interactive_resize_end(&1);
+        } else {
+            layout.set_window_width(Some(&1), SizeChange::AdjustFixed(-112));
+            Op::Communicate(1).apply(&mut layout);
+            layout.refresh(true);
+        }
+        Op::CompleteAnimations.apply(&mut layout);
+        let after = ipc_rectangles(&layout);
+        assert_eq!(after[&2].size, before[&2].size);
+        assert_eq!(after[&3].size, before[&3].size);
+        assert_eq!(
+            after[&3].loc - after[&2].loc,
+            before[&3].loc - before[&2].loc
+        );
+        assert_eq!(after[&2].loc.x - after[&1].loc.x - after[&1].size.w, 4.);
+        layout.focus_right();
+        assert_eq!(*layout.focus().unwrap().id(), 2);
+
+        layout.activate_window(&1);
+        if interactive {
+            layout.interactive_resize_begin(1, ResizeEdge::RIGHT);
+            layout.interactive_resize_update(&1, Point::from((112., 0.)));
+            Op::Communicate(1).apply(&mut layout);
+            layout.refresh(true);
+            layout.interactive_resize_end(&1);
+        } else {
+            layout.set_window_width(Some(&1), SizeChange::AdjustFixed(112));
+            Op::Communicate(1).apply(&mut layout);
+            layout.refresh(true);
+        }
+        Op::CompleteAnimations.apply(&mut layout);
+        let grown = ipc_rectangles(&layout);
+        assert_eq!(grown[&2].loc.x - grown[&1].loc.x - grown[&1].size.w, 4.);
+        assert_eq!(
+            grown[&3].loc - grown[&2].loc,
+            before[&3].loc - before[&2].loc
         );
     }
 }
