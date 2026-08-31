@@ -776,6 +776,22 @@ impl<W: LayoutElement> Workspace<W> {
         removed
     }
 
+    pub fn remove_tile_external(&mut self, id: &W::Id, transaction: Transaction) -> RemovedTile<W> {
+        let mut from_floating = false;
+        let removed = if self.floating.has_window(id) {
+            from_floating = true;
+            self.floating.remove_tile(id)
+        } else {
+            self.scrolling.remove_tile_external(id, transaction)
+        };
+
+        if let Some(output) = &self.output {
+            removed.tile.window().output_leave(output);
+        }
+        self.update_focus_floating_tiling_after_removing(from_floating);
+        removed
+    }
+
     pub fn remove_active_column(&mut self) -> Option<Column<W>> {
         let from_floating = self.floating_is_active.get();
         if from_floating {
@@ -1865,6 +1881,14 @@ impl<W: LayoutElement> Workspace<W> {
 
     pub(super) fn scrolling_insert_position(&self, pos: Point<f64, Logical>) -> InsertPosition {
         self.scrolling.insert_position(pos)
+    }
+
+    pub(super) fn snap_tiled_window_to_contact(
+        &mut self,
+        window: &W::Id,
+        pointer: Point<f64, Logical>,
+    ) -> bool {
+        self.scrolling.snap_window_to_contact(window, pointer)
     }
 
     pub(super) fn insert_hint_area(

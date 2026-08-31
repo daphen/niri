@@ -8,25 +8,49 @@ pub(in crate::layout) enum Direction {
     Down,
 }
 
-pub(in crate::layout) fn nearest<I: Clone + PartialEq>(
+pub(in crate::layout) fn nearest_contact<I: Clone + PartialEq>(
     current: &I,
     direction: Direction,
     items: &[(I, Rectangle<f64, Logical>, u64)],
+    gap: f64,
 ) -> Option<I> {
     let (_, current_rect, _) = items.iter().find(|(id, _, _)| id == current)?;
     items
         .iter()
-        .filter(|(id, rect, _)| {
-            id != current && axis_gaps(*current_rect, *rect, direction).is_some()
+        .filter_map(|(id, rect, order)| {
+            let (primary, perpendicular) = axis_gaps(*current_rect, *rect, direction)?;
+            ((primary.into_inner() - gap).abs() < 0.001
+                && perpendicular.into_inner() == 0.
+                && perpendicular_overlap(*current_rect, *rect, direction) > 0.)
+                .then_some((id, order))
         })
-        .min_by(|a, b| {
-            axis_gaps(*current_rect, a.1, direction)
-                .unwrap()
-                .partial_cmp(&axis_gaps(*current_rect, b.1, direction).unwrap())
-                .unwrap()
-                .then_with(|| a.2.cmp(&b.2))
-        })
-        .map(|(id, _, _)| id.clone())
+        .min_by_key(|(_, order)| *order)
+        .map(|(id, _)| id.clone())
+}
+
+pub(in crate::layout) fn strict_contact(
+    from: Rectangle<f64, Logical>,
+    to: Rectangle<f64, Logical>,
+    direction: Direction,
+    gap: f64,
+) -> bool {
+    axis_gaps(from, to, direction).is_some_and(|(primary, perpendicular)| {
+        (primary.into_inner() - gap).abs() < 0.001
+            && perpendicular.into_inner() == 0.
+            && perpendicular_overlap(from, to, direction) > 0.
+    })
+}
+
+fn perpendicular_overlap(
+    from: Rectangle<f64, Logical>,
+    to: Rectangle<f64, Logical>,
+    direction: Direction,
+) -> f64 {
+    let (a, a_size, b, b_size) = match direction {
+        Direction::Left | Direction::Right => (from.loc.y, from.size.h, to.loc.y, to.size.h),
+        Direction::Up | Direction::Down => (from.loc.x, from.size.w, to.loc.x, to.size.w),
+    };
+    (a + a_size).min(b + b_size) - a.max(b)
 }
 
 fn axis_gaps(

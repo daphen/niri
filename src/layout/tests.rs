@@ -2509,132 +2509,6 @@ fn one_window_in_column_becomes_weight_1() {
     check_ops(ops);
 }
 
-#[test]
-fn spatial_layout_packs_variable_rectangles_and_navigates_both_axes() {
-    let options = Options::default();
-    let gap = options.layout.gaps;
-    let mut layout = check_ops_with_options(options, [Op::AddOutput(1)]);
-    for (id, width, height) in [
-        (1, 620, 500),
-        (2, 360, 220),
-        (3, 420, 300),
-        (4, 280, 180),
-        (5, 500, 260),
-        (6, 320, 420),
-        (7, 460, 200),
-        (8, 300, 340),
-        (9, 380, 240),
-    ] {
-        let mut params = TestWindowParams::new(id);
-        params.app_id = Some("spatial".into());
-        Op::AddWindow { params }.apply(&mut layout);
-        layout.set_window_width(Some(&id), SizeChange::SetFixed(width));
-        layout.set_window_height(Some(&id), SizeChange::SetFixed(height));
-        Op::Communicate(id).apply(&mut layout);
-        layout.refresh(true);
-        if matches!(id, 3 | 6 | 9) {
-            layout.move_down();
-            Op::CompleteAnimations.apply(&mut layout);
-        }
-    }
-    Op::CompleteAnimations.apply(&mut layout);
-
-    let mut rectangles = Vec::new();
-    layout.with_windows(|window, _, _, ipc| {
-        let position: Point<f64, Logical> = Point::from(ipc.tile_pos_in_workspace_view.unwrap());
-        rectangles.push((
-            *window.id(),
-            Rectangle::new(position, Size::from(ipc.tile_size)),
-        ));
-    });
-    assert_eq!(rectangles.len(), 9);
-    for (idx, (_, rectangle)) in rectangles.iter().enumerate() {
-        for (_, other) in &rectangles[idx + 1..] {
-            assert!(
-                rectangle.loc.x + rectangle.size.w + gap <= other.loc.x
-                    || other.loc.x + other.size.w + gap <= rectangle.loc.x
-                    || rectangle.loc.y + rectangle.size.h + gap <= other.loc.y
-                    || other.loc.y + other.size.h + gap <= rectangle.loc.y
-            );
-        }
-    }
-    let x_values = rectangles
-        .iter()
-        .map(|(_, rectangle)| rectangle.loc.x.round() as i32)
-        .collect::<std::collections::BTreeSet<_>>();
-    let y_values = rectangles
-        .iter()
-        .map(|(_, rectangle)| rectangle.loc.y.round() as i32)
-        .collect::<std::collections::BTreeSet<_>>();
-    assert!(x_values.len() > 1 && y_values.len() > 1);
-    assert!(rectangles.iter().any(|(_, tall)| {
-        rectangles.iter().any(|(_, lower)| {
-            tall != lower
-                && lower.loc.y > tall.loc.y
-                && lower.loc.y < tall.loc.y + tall.size.h
-                && (lower.loc.x >= tall.loc.x + tall.size.w + gap
-                    || tall.loc.x >= lower.loc.x + lower.size.w + gap)
-        })
-    }));
-    let origin = rectangles
-        .iter()
-        .find(|(_, rectangle)| {
-            rectangles
-                .iter()
-                .any(|(_, other)| other.loc.x >= rectangle.loc.x + rectangle.size.w)
-                && rectangles
-                    .iter()
-                    .any(|(_, other)| other.loc.y >= rectangle.loc.y + rectangle.size.h)
-        })
-        .unwrap()
-        .0;
-    layout.activate_window(&origin);
-    layout.focus_right();
-    assert_ne!(*layout.focus().unwrap().id(), origin);
-    layout.activate_window(&origin);
-    layout.focus_down();
-    assert_ne!(*layout.focus().unwrap().id(), origin);
-}
-
-fn spatial_stack_fixture() -> Layout<TestWindow> {
-    let mut layout = check_ops([Op::AddOutput(1)]);
-    for (id, width, height) in [
-        (0, 420, 180),
-        (1, 420, 240),
-        (2, 420, 300),
-        (3, 300, 200),
-        (4, 520, 260),
-    ] {
-        Op::AddWindow {
-            params: TestWindowParams::new(id),
-        }
-        .apply(&mut layout);
-        layout.set_window_width(Some(&id), SizeChange::SetFixed(width));
-        layout.set_window_height(Some(&id), SizeChange::SetFixed(height));
-        Op::Communicate(id).apply(&mut layout);
-        layout.refresh(true);
-    }
-    Op::FocusColumnFirst.apply(&mut layout);
-    Op::ConsumeWindowIntoColumn.apply(&mut layout);
-    Op::ConsumeWindowIntoColumn.apply(&mut layout);
-    Op::FocusWindowDown.apply(&mut layout);
-    Op::CompleteAnimations.apply(&mut layout);
-
-    assert_eq!(*layout.focus().unwrap().id(), 1);
-    layout
-}
-
-fn spatial_stack_move_fixture() -> (
-    Layout<TestWindow>,
-    std::collections::BTreeMap<usize, Rectangle<f64, Logical>>,
-) {
-    let mut layout = spatial_stack_fixture();
-    let before = ipc_rectangles(&layout);
-    layout.move_right();
-    Op::CompleteAnimations.apply(&mut layout);
-    (layout, before)
-}
-
 fn ipc_rectangles(
     layout: &Layout<TestWindow>,
 ) -> std::collections::BTreeMap<usize, Rectangle<f64, Logical>> {
@@ -2669,480 +2543,70 @@ fn rendered_rectangles(
 }
 
 #[test]
-fn production_actions_activate_new_windows_and_navigate_with_internal_workspaces() {
-    let mut layout = check_ops_with_options(Options::default(), [Op::AddOutput(1)]);
-
-    for (id, width, height) in [
-        (1, 620, 500),
-        (2, 360, 220),
-        (3, 420, 300),
-        (4, 280, 180),
-        (5, 500, 260),
-        (6, 320, 420),
-        (7, 460, 200),
-        (8, 300, 340),
-        (9, 380, 240),
-    ] {
-        let mut params = TestWindowParams::new(id);
-        params.app_id = Some("org.quickshell".into());
-        Op::AddWindow { params }.apply(&mut layout);
-        assert_eq!(*layout.focus().unwrap().id(), id);
-
-        layout.set_window_width(Some(&id), SizeChange::SetFixed(width));
-        layout.set_window_height(Some(&id), SizeChange::SetFixed(height));
-        Op::Communicate(id).apply(&mut layout);
-        layout.refresh(true);
-        assert_eq!(*layout.focus().unwrap().id(), id);
-    }
-    Op::CompleteAnimations.apply(&mut layout);
-    assert!(layout.workspaces().count() >= 2);
-
-    layout.activate_window(&4);
-    Op::CompleteAnimations.apply(&mut layout);
-    let mut params = TestWindowParams::new(10);
-    params.app_id = Some("org.quickshell".into());
-    Op::AddWindow { params }.apply(&mut layout);
-    let after_insert = ipc_rectangles(&layout);
+fn strict_contact_horizontal_moves_are_symmetric_for_unequal_windows() {
     let gap = Options::default().layout.gaps;
-    assert_eq!(*layout.focus().unwrap().id(), 10);
-    assert_eq!(after_insert[&10].loc.y, after_insert[&4].loc.y);
-    assert_eq!(
-        after_insert[&10].loc.x,
-        after_insert[&4].loc.x + after_insert[&4].size.w + gap
-    );
-    assert_eq!(
-        after_insert[&5].loc.x,
-        after_insert[&10].loc.x + after_insert[&10].size.w + gap
-    );
-    Op::CompleteAnimations.apply(&mut layout);
-    layout.activate_window(&3);
-    layout.move_down();
-    Op::CompleteAnimations.apply(&mut layout);
-    layout.activate_window(&6);
-    layout.move_up();
-    Op::CompleteAnimations.apply(&mut layout);
-
-    for (direction, action) in [
-        (0, Op::FocusColumnLeft),
-        (1, Op::FocusColumnRight),
-        (2, Op::FocusWindowUp),
-        (3, Op::FocusWindowDown),
-    ] {
-        let rectangles = ipc_rectangles(&layout);
-        let origin = rectangles
-            .iter()
-            .find(|(_, from)| {
-                rectangles.values().any(|to| match direction {
-                    0 => to.loc.x + to.size.w <= from.loc.x,
-                    1 => from.loc.x + from.size.w <= to.loc.x,
-                    2 => to.loc.y + to.size.h <= from.loc.y,
-                    3 => from.loc.y + from.size.h <= to.loc.y,
-                    _ => unreachable!(),
-                })
-            })
-            .map(|(id, _)| *id)
-            .unwrap();
-        layout.activate_window(&origin);
-        Op::CompleteAnimations.apply(&mut layout);
-        let before = ipc_rectangles(&layout);
-        action.apply(&mut layout);
-        let target = *layout.focus().unwrap().id();
-        assert_ne!(target, origin);
-        let from = before[&origin];
-        let to = before[&target];
-        assert!(match direction {
-            0 => to.loc.x + to.size.w <= from.loc.x,
-            1 => from.loc.x + from.size.w <= to.loc.x,
-            2 => to.loc.y + to.size.h <= from.loc.y,
-            3 => from.loc.y + from.size.h <= to.loc.y,
-            _ => unreachable!(),
-        });
-        assert!(layout.are_animations_ongoing(None));
-        Op::CompleteAnimations.apply(&mut layout);
-    }
-}
-
-#[test]
-fn spatial_move_extracts_only_middle_stack_window() {
-    let (layout, _) = spatial_stack_move_fixture();
-    let after = ipc_rectangles(&layout);
-    assert_eq!(*layout.focus().unwrap().id(), 1);
-    assert_eq!(after[&0].loc.x, after[&2].loc.x);
-    assert_ne!(after[&1].loc.x, after[&0].loc.x);
-}
-
-#[test]
-fn spatial_move_pushes_destination_neighbor() {
-    let (layout, before) = spatial_stack_move_fixture();
-    let after = ipc_rectangles(&layout);
-    let gap = Options::default().layout.gaps;
-    assert_eq!(after[&1].size, before[&1].size);
-    assert_eq!(after[&3].size, before[&3].size);
-    assert!(after[&3].loc.x >= after[&1].loc.x + after[&1].size.w + gap);
-    assert_eq!(
-        after[&3].loc - after[&4].loc,
-        before[&3].loc - before[&4].loc
-    );
-}
-
-#[test]
-fn spatial_move_creates_axis_slot_then_inserts_and_pushes_target_row() {
     let mut layout = check_ops([Op::AddOutput(1)]);
-    for id in 1..=3 {
-        Op::AddWindow {
-            params: TestWindowParams::new(id),
-        }
-        .apply(&mut layout);
-    }
-    Op::CompleteAnimations.apply(&mut layout);
-    let sizes = ipc_rectangles(&layout)
-        .into_iter()
-        .map(|(id, rectangle)| (id, rectangle.size))
-        .collect::<std::collections::BTreeMap<_, _>>();
-
-    layout.activate_window(&2);
-    layout.move_down();
-    Op::CompleteAnimations.apply(&mut layout);
-    let vertical = ipc_rectangles(&layout);
-    assert!(vertical[&2].loc.y >= vertical[&1].loc.y + vertical[&1].size.h);
-
-    layout.activate_window(&1);
-    layout.move_down();
-    Op::CompleteAnimations.apply(&mut layout);
-    let lower_row = ipc_rectangles(&layout);
-    let gap = Options::default().layout.gaps;
-    assert_eq!(lower_row[&1].loc.y, lower_row[&2].loc.y);
-    assert_eq!(
-        lower_row[&2].loc.x,
-        lower_row[&1].loc.x + lower_row[&1].size.w + gap
-    );
-
-    layout.activate_window(&2);
-    layout.move_up();
-    Op::CompleteAnimations.apply(&mut layout);
-    let upper_row = ipc_rectangles(&layout);
-    assert_eq!(upper_row[&2].loc.y, upper_row[&3].loc.y);
-    assert!(upper_row[&2].loc.x >= upper_row[&3].loc.x + upper_row[&3].size.w + gap);
-    for (id, size) in sizes {
-        assert_eq!(upper_row[&id].size, size);
-    }
-}
-
-fn spatial_center_lane_fixture(app_id: Option<&str>) -> Layout<TestWindow> {
-    let mut layout = check_ops([Op::AddOutput(1)]);
-    for (id, width) in [(1, 100), (2, 92), (3, 96), (4, 88), (5, 94), (6, 90)] {
-        let mut params = TestWindowParams::new(id);
-        params.app_id = app_id.map(str::to_owned);
-        Op::AddWindow { params }.apply(&mut layout);
-        layout.set_window_width(Some(&id), SizeChange::SetFixed(width));
-        Op::Communicate(id).apply(&mut layout);
-        layout.refresh(true);
-    }
-    Op::CompleteAnimations.apply(&mut layout);
-    layout.activate_window(&3);
-    layout.move_down();
-    Op::CompleteAnimations.apply(&mut layout);
-    layout
-}
-
-#[test]
-fn spatial_vertical_move_fills_empty_cluster_center_with_asymmetric_widths() {
-    let mut layout = check_ops([Op::AddOutput(1)]);
-    for (id, width) in [(1, 100), (2, 92), (3, 96), (4, 88), (5, 94), (6, 90)] {
+    for (id, width) in [(1, 320), (2, 540), (3, 280)] {
         Op::AddWindow {
             params: TestWindowParams::new(id),
         }
         .apply(&mut layout);
         layout.set_window_width(Some(&id), SizeChange::SetFixed(width));
-        Op::Communicate(id).apply(&mut layout);
-        layout.refresh(true);
-    }
-    Op::CompleteAnimations.apply(&mut layout);
-    layout.activate_window(&3);
-    layout.move_down();
-    Op::CompleteAnimations.apply(&mut layout);
-    let after = ipc_rectangles(&layout);
-    let source = [1, 2, 4, 5, 6];
-    let left = source
-        .iter()
-        .map(|id| after[id].loc.x)
-        .min_by(f64::total_cmp)
-        .unwrap();
-    let right = source
-        .iter()
-        .map(|id| after[id].loc.x + after[id].size.w)
-        .max_by(f64::total_cmp)
-        .unwrap();
-    assert!(((after[&3].loc.x + after[&3].size.w / 2.) - (left + right) / 2.).abs() < 0.01);
-}
-
-#[test]
-fn spatial_vertical_move_projects_rightmost_and_leftmost_lanes() {
-    let mut right = spatial_center_lane_fixture(Some("cluster"));
-    right.activate_window(&6);
-    right.move_down();
-    Op::CompleteAnimations.apply(&mut right);
-    let rectangles = ipc_rectangles(&right);
-    assert!(rectangles[&6].loc.x > rectangles[&3].loc.x);
-
-    let mut left = spatial_center_lane_fixture(None);
-    left.activate_window(&1);
-    left.move_down();
-    Op::CompleteAnimations.apply(&mut left);
-    let rectangles = ipc_rectangles(&left);
-    assert!(rectangles[&1].loc.x < rectangles[&3].loc.x);
-}
-
-#[test]
-fn spatial_vertical_move_fills_even_row_center_slot() {
-    let mut layout = check_ops([Op::AddOutput(1)]);
-    for id in 1..=4 {
-        Op::AddWindow {
-            params: TestWindowParams::new(id),
-        }
-        .apply(&mut layout);
-    }
-    Op::CompleteAnimations.apply(&mut layout);
-    for id in [2, 3] {
-        layout.activate_window(&id);
-        layout.move_down();
-        Op::CompleteAnimations.apply(&mut layout);
-    }
-    let before = ipc_rectangles(&layout);
-    let mut outer = [2, 3];
-    outer.sort_by(|a, b| before[a].loc.x.total_cmp(&before[b].loc.x));
-
-    layout.activate_window(&1);
-    layout.move_down();
-    Op::CompleteAnimations.apply(&mut layout);
-    let rectangles = ipc_rectangles(&layout);
-    let mut lower = [1, 2, 3];
-    lower.sort_by(|a, b| rectangles[a].loc.x.total_cmp(&rectangles[b].loc.x));
-    assert_eq!(lower, [outer[0], 1, outer[1]]);
-}
-
-#[test]
-fn spatial_vertical_move_extracts_middle_native_tile_and_collapses_stack() {
-    let mut layout = spatial_stack_fixture();
-    let before = ipc_rectangles(&layout);
-    let rendered = rendered_rectangles(&layout)[&1].loc;
-    layout.move_down();
-    let restarted = rendered_rectangles(&layout)[&1].loc;
-    assert!((restarted - rendered).x.hypot((restarted - rendered).y) < 0.01);
-    Op::CompleteAnimations.apply(&mut layout);
-    let after = ipc_rectangles(&layout);
-    assert!(after[&2].loc.y - after[&0].loc.y < before[&2].loc.y - before[&0].loc.y);
-    assert_ne!(after[&1].loc.x, after[&2].loc.x);
-}
-
-fn spatial_disconnected_same_app_fixture() -> Layout<TestWindow> {
-    let mut layout = check_ops([Op::AddOutput(1)]);
-    for id in 1..=4 {
-        let mut params = TestWindowParams::new(id);
-        params.app_id = Some("same-app".into());
-        Op::AddWindow { params }.apply(&mut layout);
-        layout.set_window_width(Some(&id), SizeChange::SetFixed(400));
-        Op::Communicate(id).apply(&mut layout);
-        layout.refresh(true);
-    }
-    Op::CompleteAnimations.apply(&mut layout);
-    layout.set_window_width(Some(&2), SizeChange::SetFixed(100));
-    Op::Communicate(2).apply(&mut layout);
-    layout.refresh(true);
-    Op::CompleteAnimations.apply(&mut layout);
-    layout
-}
-
-#[test]
-fn spatial_same_app_disconnected_component_preserves_its_shape() {
-    let mut layout = spatial_disconnected_same_app_fixture();
-    let before = ipc_rectangles(&layout);
-    assert!(
-        before[&3].loc.x - (before[&2].loc.x + before[&2].size.w)
-            > Options::default().layout.gaps * 2.
-    );
-
-    layout.activate_window(&2);
-    layout.move_down();
-    Op::CompleteAnimations.apply(&mut layout);
-    let after = ipc_rectangles(&layout);
-    assert_eq!(
-        after[&4].loc - after[&3].loc,
-        before[&4].loc - before[&3].loc
-    );
-}
-
-#[test]
-fn spatial_vertical_move_pushes_blocking_component() {
-    let mut layout = check_ops([Op::AddOutput(1)]);
-    for (id, height) in [(0, 180), (1, 240), (2, 300)] {
-        let mut params = TestWindowParams::new(id);
-        params.bbox.size = Size::from((420, height));
-        Op::AddWindow { params }.apply(&mut layout);
-    }
-    Op::FocusColumnFirst.apply(&mut layout);
-    Op::ConsumeWindowIntoColumn.apply(&mut layout);
-    Op::ConsumeWindowIntoColumn.apply(&mut layout);
-    for (id, width, height) in [(3, 300, 600), (4, 520, 260)] {
-        let mut params = TestWindowParams::new(id);
-        params.bbox.size = Size::from((width, height));
-        Op::AddWindow { params }.apply(&mut layout);
-    }
-    layout.activate_window(&1);
-    Op::CompleteAnimations.apply(&mut layout);
-    let before = ipc_rectangles(&layout);
-    let blocker_shape = before[&4].loc - before[&3].loc;
-    let rendered = rendered_rectangles(&layout)[&3].loc;
-
-    layout.move_down();
-    assert_eq!(rendered_rectangles(&layout)[&3].loc, rendered);
-    Op::CompleteAnimations.apply(&mut layout);
-    let after = ipc_rectangles(&layout);
-    assert_eq!(after[&4].loc - after[&3].loc, blocker_shape);
-    let affected_right = [1, 2]
-        .iter()
-        .map(|id| after[id].loc.x + after[id].size.w)
-        .max_by(f64::total_cmp)
-        .unwrap();
-    assert!((after[&3].loc.x - affected_right - Options::default().layout.gaps).abs() < 0.01);
-}
-
-#[test]
-fn spatial_move_collapses_source_stack_vacancy() {
-    let (layout, before) = spatial_stack_move_fixture();
-    let after = ipc_rectangles(&layout);
-    assert!(after[&2].loc.y - after[&0].loc.y < before[&2].loc.y - before[&0].loc.y);
-    assert_eq!(after[&0].loc.x, after[&2].loc.x);
-}
-
-#[test]
-fn spatial_move_preserves_mixed_window_sizes() {
-    let (layout, before) = spatial_stack_move_fixture();
-    let after = ipc_rectangles(&layout);
-    for id in 0..5 {
-        assert_eq!(after[&id].size, before[&id].size);
-    }
-}
-
-fn spatial_horizontal_fixture(widths: &[i32]) -> Layout<TestWindow> {
-    let mut layout = check_ops([Op::AddOutput(1)]);
-    for (idx, width) in widths.iter().enumerate() {
-        let id = idx + 1;
-        Op::AddWindow {
-            params: TestWindowParams::new(id),
-        }
-        .apply(&mut layout);
-        layout.set_window_width(Some(&id), SizeChange::SetFixed(*width));
         layout.set_window_height(Some(&id), SizeChange::SetFixed(240));
         Op::Communicate(id).apply(&mut layout);
         layout.refresh(true);
     }
     Op::CompleteAnimations.apply(&mut layout);
-    layout
-}
+    let sizes = ipc_rectangles(&layout);
 
-#[test]
-fn spatial_horizontal_move_is_mirrored_for_two_variable_width_windows() {
-    let mut move_right = spatial_horizontal_fixture(&[320, 540]);
-    let mut move_left = spatial_horizontal_fixture(&[320, 540]);
-    let rendered_right_before = rendered_rectangles(&move_right)[&1];
-    let rendered_left_before = rendered_rectangles(&move_left)[&2];
-
-    move_right.activate_window(&1);
-    move_right.move_right();
-    move_left.activate_window(&2);
-    move_left.move_left();
-
-    assert_eq!(*move_right.focus().unwrap().id(), 1);
-    assert_eq!(*move_left.focus().unwrap().id(), 2);
-    assert_eq!(rendered_rectangles(&move_right)[&1], rendered_right_before);
-    assert_eq!(rendered_rectangles(&move_left)[&2], rendered_left_before);
-    assert!(move_right.are_animations_ongoing(None));
-    assert!(move_left.are_animations_ongoing(None));
-
-    Op::CompleteAnimations.apply(&mut move_right);
-    Op::CompleteAnimations.apply(&mut move_left);
-    let right = ipc_rectangles(&move_right);
-    let left = ipc_rectangles(&move_left);
-    let translation = left[&1].loc.x - right[&1].loc.x;
-    for id in [1, 2] {
-        assert_eq!(right[&id].size, left[&id].size);
-        assert_eq!(right[&id].loc.x + translation, left[&id].loc.x);
-        assert_eq!(right[&id].loc.y, left[&id].loc.y);
-    }
-}
-
-#[test]
-fn spatial_horizontal_move_inserts_and_pushes_symmetrically_in_three_window_row() {
-    let gap = Options::default().layout.gaps;
-    let mut move_right = spatial_horizontal_fixture(&[300, 500, 300]);
-    let mut move_left = spatial_horizontal_fixture(&[300, 500, 300]);
-
-    move_right.activate_window(&1);
-    move_right.move_right();
-    move_left.activate_window(&3);
-    move_left.move_left();
-    Op::CompleteAnimations.apply(&mut move_right);
-    Op::CompleteAnimations.apply(&mut move_left);
-
-    let right = ipc_rectangles(&move_right);
-    assert_eq!(right[&1].loc.x, right[&2].loc.x + right[&2].size.w + gap);
-    assert_eq!(right[&3].loc.x, right[&1].loc.x + right[&1].size.w + gap);
-
-    let left = ipc_rectangles(&move_left);
-    assert_eq!(left[&3].loc.x, left[&1].loc.x + left[&1].size.w + gap);
-    assert_eq!(left[&2].loc.x, left[&3].loc.x + left[&3].size.w + gap);
-
-    let right_min = right
-        .values()
-        .map(|rect| rect.loc.x)
-        .fold(f64::MAX, f64::min);
-    let right_max = right
-        .values()
-        .map(|rect| rect.loc.x + rect.size.w)
-        .fold(f64::MIN, f64::max);
-    let left_min = left
-        .values()
-        .map(|rect| rect.loc.x)
-        .fold(f64::MAX, f64::min);
-    let left_max = left
-        .values()
-        .map(|rect| rect.loc.x + rect.size.w)
-        .fold(f64::MIN, f64::max);
-    assert_eq!(right_max - right_min, left_max - left_min);
-    for (right_id, left_id) in [(1, 3), (2, 2), (3, 1)] {
-        assert_eq!(right[&right_id].size, left[&left_id].size);
-        assert_eq!(
-            right[&right_id].loc.x - right_min,
-            left_max - (left[&left_id].loc.x + left[&left_id].size.w)
-        );
-    }
-}
-
-#[test]
-fn spatial_middle_stack_move_preserves_rendered_position() {
-    let mut layout = spatial_stack_fixture();
-    let rendered = |layout: &Layout<TestWindow>| {
-        layout
-            .active_workspace()
-            .unwrap()
-            .scrolling()
-            .tiles_with_render_positions()
-            .find_map(|(tile, position, _)| (tile.window().id() == &1).then_some(position))
-            .unwrap()
-    };
-    let before = rendered(&layout);
+    layout.activate_window(&1);
     layout.move_right();
-    let after = rendered(&layout);
-    let delta = after - before;
-    assert!(
-        delta.x.hypot(delta.y) < 0.01,
-        "middle-stack move jumped from {before:?} to {after:?} by {delta:?}"
-    );
+    Op::CompleteAnimations.apply(&mut layout);
+    let right = ipc_rectangles(&layout);
+    assert_eq!(right[&2].loc.x + right[&2].size.w + gap, right[&1].loc.x);
+    assert_eq!(right[&1].loc.x + right[&1].size.w + gap, right[&3].loc.x);
+    for id in 1..=3 {
+        assert_eq!(right[&id].loc.y, sizes[&id].loc.y);
+        assert_eq!(right[&id].size, sizes[&id].size);
+    }
+
+    layout.move_left();
+    Op::CompleteAnimations.apply(&mut layout);
+    assert_eq!(ipc_rectangles(&layout), sizes);
 }
 
 #[test]
-fn spatial_move_and_interruption_preserve_rendered_position() {
+fn invalid_directional_move_is_a_complete_noop() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+    ]);
+    layout.activate_window(&1);
+    Op::CompleteAnimations.apply(&mut layout);
+    let rectangles = ipc_rectangles(&layout);
+    let rendered = rendered_rectangles(&layout);
+    let focused = *layout.focus().unwrap().id();
+
+    layout.move_down();
+    assert_eq!(ipc_rectangles(&layout), rectangles);
+    assert_eq!(rendered_rectangles(&layout), rendered);
+    assert_eq!(*layout.focus().unwrap().id(), focused);
+    assert!(!layout.are_animations_ongoing(None));
+
+    layout.focus_down();
+    assert_eq!(ipc_rectangles(&layout), rectangles);
+    assert_eq!(*layout.focus().unwrap().id(), focused);
+    assert!(!layout.are_animations_ongoing(None));
+}
+
+#[test]
+fn middle_removal_repairs_only_the_freed_contact_side() {
+    let gap = Options::default().layout.gaps;
     let mut layout = check_ops([
         Op::AddOutput(1),
         Op::AddWindow {
@@ -3156,29 +2620,99 @@ fn spatial_move_and_interruption_preserve_rendered_position() {
         },
     ]);
     Op::CompleteAnimations.apply(&mut layout);
-    let rendered = |layout: &Layout<TestWindow>, id| {
-        layout
-            .active_workspace()
-            .unwrap()
-            .scrolling()
-            .tiles_with_render_positions()
-            .find_map(|(tile, position, _)| (tile.window().id() == &id).then_some(position))
-            .unwrap()
-    };
+    let before = ipc_rectangles(&layout);
+    Op::CloseWindow(2).apply(&mut layout);
+    Op::CompleteAnimations.apply(&mut layout);
+    let after = ipc_rectangles(&layout);
+    assert_eq!(after[&1].size, before[&1].size);
+    assert_eq!(
+        after[&3].loc.x,
+        after[&1].loc.x + after[&1].size.w + gap,
+        "before={before:?} after={after:?}"
+    );
+    assert_eq!(
+        after[&3].loc.y - after[&1].loc.y,
+        before[&3].loc.y - before[&1].loc.y
+    );
+    assert_eq!(after[&3].size, before[&3].size);
+}
 
+#[test]
+fn edge_removal_does_not_repair_without_two_sides() {
+    for removed in [1, 3] {
+        let mut layout = check_ops([
+            Op::AddOutput(1),
+            Op::AddWindow {
+                params: TestWindowParams::new(1),
+            },
+            Op::AddWindow {
+                params: TestWindowParams::new(2),
+            },
+            Op::AddWindow {
+                params: TestWindowParams::new(3),
+            },
+        ]);
+        Op::CompleteAnimations.apply(&mut layout);
+        let before = ipc_rectangles(&layout);
+        Op::CloseWindow(removed).apply(&mut layout);
+        Op::CompleteAnimations.apply(&mut layout);
+        let after = ipc_rectangles(&layout);
+        let survivors = if removed == 1 { [2, 3] } else { [1, 2] };
+        assert_eq!(
+            after[&survivors[1]].loc - after[&survivors[0]].loc,
+            before[&survivors[1]].loc - before[&survivors[0]].loc
+        );
+        for id in survivors {
+            assert_eq!(after[&id].size, before[&id].size);
+        }
+    }
+}
+
+#[test]
+fn pointer_drop_creates_first_vertical_strict_contact() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(3),
+        },
+    ]);
     layout.activate_window(&1);
-    let before = rendered(&layout, 1);
-    layout.move_down();
-    let after = rendered(&layout, 1);
-    let delta = after - before;
-    assert!(delta.x.hypot(delta.y) < 0.01);
+    Op::CompleteAnimations.apply(&mut layout);
+    let before = ipc_rectangles(&layout);
+    let output = layout.outputs().next().unwrap().clone();
+    let source = before[&2];
+    let target = before[&1];
+    let start = source.loc + source.size.downscale(2.);
+    let drop = Point::from((
+        target.loc.x + target.size.w + Options::default().layout.gaps,
+        target.loc.y + target.size.h + Options::default().layout.gaps + source.size.h / 2.,
+    ));
 
-    Op::AdvanceAnimations { msec_delta: 32 }.apply(&mut layout);
-    let interrupted = rendered(&layout, 1);
-    layout.move_up();
-    let restarted = rendered(&layout, 1);
-    let delta = restarted - interrupted;
-    assert!(delta.x.hypot(delta.y) < 0.01);
+    layout.interactive_move_begin(2, &output, start);
+    layout.interactive_move_update(&2, Point::from((0., 300.)), output, drop);
+    layout.interactive_move_end(&2);
+    Op::CompleteAnimations.apply(&mut layout);
+    let after = ipc_rectangles(&layout);
+    let moved = after[&2];
+    let gap = Options::default().layout.gaps;
+    let anchor = after
+        .iter()
+        .find_map(|(id, rectangle)| {
+            (*id != 2
+                && rectangle.loc.y + rectangle.size.h + gap == moved.loc.y
+                && moved.loc.x < rectangle.loc.x + rectangle.size.w
+                && rectangle.loc.x < moved.loc.x + moved.size.w)
+                .then_some(rectangle)
+        })
+        .unwrap();
+    assert_eq!(moved.loc.y, anchor.loc.y + anchor.size.h + gap);
+    assert_eq!(moved.size, source.size);
 }
 
 #[test]

@@ -931,6 +931,80 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         }
     }
 
+    pub(super) fn snap_window_to_contact(
+        &mut self,
+        window: &W::Id,
+        pointer: Point<f64, Logical>,
+    ) -> bool {
+        let Some((column_idx, tile_idx)) =
+            self.columns
+                .iter()
+                .enumerate()
+                .find_map(|(column_idx, column)| {
+                    column
+                        .position(window)
+                        .map(|tile_idx| (column_idx, tile_idx))
+                })
+        else {
+            return false;
+        };
+        if self.columns[column_idx].tiles.len() != 1 {
+            return false;
+        }
+        let tiles = self.spatial_tiles();
+        let Some((_, current, _)) = tiles.iter().find(|(id, _, _)| id == window) else {
+            return false;
+        };
+        let view = self.spatial_view_pos();
+        let desired = Point::from((
+            pointer.x + view.x - current.size.w / 2.,
+            pointer.y + view.y - current.size.h / 2.,
+        ));
+        let gap = self.options.layout.gaps;
+        let conflicts = |candidate: Rectangle<f64, Logical>| {
+            tiles.iter().any(|(id, other, _)| {
+                id != window
+                    && candidate.loc.x < other.loc.x + other.size.w + gap
+                    && other.loc.x < candidate.loc.x + candidate.size.w + gap
+                    && candidate.loc.y < other.loc.y + other.size.h + gap
+                    && other.loc.y < candidate.loc.y + candidate.size.h + gap
+            })
+        };
+        let mut candidates = Vec::new();
+        for (id, other, _) in &tiles {
+            if id == window {
+                continue;
+            }
+            candidates.extend([
+                Point::from((other.loc.x - current.size.w - gap, other.loc.y)),
+                Point::from((other.loc.x + other.size.w + gap, other.loc.y)),
+                Point::from((other.loc.x, other.loc.y - current.size.h - gap)),
+                Point::from((other.loc.x, other.loc.y + other.size.h + gap)),
+            ]);
+        }
+        let Some(position) = candidates
+            .into_iter()
+            .filter(|position| !conflicts(Rectangle::new(*position, current.size)))
+            .min_by(|a, b| {
+                let distance = |position: Point<f64, Logical>| {
+                    let delta = position - desired;
+                    delta.x * delta.x + delta.y * delta.y
+                };
+                distance(*a).total_cmp(&distance(*b))
+            })
+        else {
+            return false;
+        };
+        let rendered = self.data[column_idx].position + self.columns[column_idx].render_offset();
+        let tile_offset = self.columns[column_idx].tile_offset(tile_idx);
+        self.data[column_idx].position = position - tile_offset;
+        self.columns[column_idx].move_x_animation = None;
+        self.columns[column_idx].move_y_animation = None;
+        self.columns[column_idx].animate_move_from(rendered - self.data[column_idx].position);
+        self.placement.remember(&self.spatial_items());
+        true
+    }
+
     pub(super) fn insert_position(&self, pos: Point<f64, Logical>) -> InsertPosition {
         if self.columns.is_empty() {
             return InsertPosition::NewColumn(0);
@@ -1184,9 +1258,32 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             .iter()
             .position(|col| col.contains(window))
             .unwrap();
-        let column = &self.columns[column_idx];
+        let tile_idx = self.columns[column_idx].position(window).unwrap();
+        self.remove_tile_by_idx(column_idx, tile_idx, transaction, None)
+    }
 
+    pub fn remove_tile_external(
+        &mut self,
+        window: &W::Id,
+        transaction: Transaction,
+    ) -> RemovedTile<W> {
+        let column_idx = self
+            .columns
+            .iter()
+            .position(|col| col.contains(window))
+            .unwrap();
+        let column = &self.columns[column_idx];
         let tile_idx = column.position(window).unwrap();
+        if column.tiles.len() == 1 {
+            let repair = self.plan_bounded_removal_repair(column_idx);
+            let mut column = self.remove_column_by_idx_with_repair(column_idx, None, repair);
+            return RemovedTile {
+                tile: column.tiles.remove(tile_idx),
+                width: column.width,
+                is_full_width: column.is_full_width,
+                is_floating: false,
+            };
+        }
         self.remove_tile_by_idx(column_idx, tile_idx, transaction, None)
     }
 
@@ -1308,10 +1405,169 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         Some(self.remove_column_by_idx(self.active_column_idx, None))
     }
 
+    fn plan_bounded_removal_repair(
+        &self,
+        removed_idx: usize,
+    ) -> Vec<(ColumnId, Point<f64, Logical>)> {
+        if self.columns.len() < 3 {
+            return Vec::new();
+        }
+        let bodies = zip(&self.columns, &self.data)
+            .map(|(column, data)| {
+                let mut tiles = column
+                    .tiles()
+                    .map(|(tile, offset)| Rectangle::new(data.position + offset, tile.tile_size()));
+                let first = tiles.next().unwrap();
+                let body = tiles.fold(first, |body, tile| body.merge(tile));
+                (column.id, body)
+            })
+            .collect::<Vec<_>>();
+        let removed = bodies[removed_idx];
+        let gap = self.options.layout.gaps;
+        let contacts = |a: Rectangle<f64, Logical>, b: Rectangle<f64, Logical>| {
+            [
+                navigation::Direction::Left,
+                navigation::Direction::Right,
+                navigation::Direction::Up,
+                navigation::Direction::Down,
+            ]
+            .into_iter()
+            .any(|direction| navigation::strict_contact(a, b, direction, gap))
+        };
+        let mut repairs: Vec<(ColumnId, Point<f64, Logical>)> = Vec::new();
+        for (before, after, horizontal) in [
+            (
+                navigation::Direction::Left,
+                navigation::Direction::Right,
+                true,
+            ),
+            (
+                navigation::Direction::Up,
+                navigation::Direction::Down,
+                false,
+            ),
+        ] {
+            let anchors = bodies
+                .iter()
+                .enumerate()
+                .filter(|(idx, (_, body))| {
+                    *idx != removed_idx && navigation::strict_contact(removed.1, *body, before, gap)
+                })
+                .map(|(_, body)| *body)
+                .collect::<Vec<_>>();
+            let seeds = bodies
+                .iter()
+                .enumerate()
+                .filter(|(idx, (_, body))| {
+                    *idx != removed_idx && navigation::strict_contact(removed.1, *body, after, gap)
+                })
+                .map(|(_, body)| *body)
+                .collect::<Vec<_>>();
+            if anchors.is_empty() || seeds.is_empty() {
+                continue;
+            }
+            let mut component = seeds.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+            let mut next = 0;
+            while next < component.len() {
+                let body = bodies
+                    .iter()
+                    .find(|(id, _)| *id == component[next])
+                    .unwrap()
+                    .1;
+                for (id, candidate) in &bodies {
+                    if *id != removed.0 && !component.contains(id) && contacts(body, *candidate) {
+                        component.push(*id);
+                    }
+                }
+                next += 1;
+            }
+            if anchors.iter().any(|(id, _)| component.contains(id)) {
+                continue;
+            }
+            if component
+                .iter()
+                .any(|id| repairs.iter().any(|(repaired, _)| repaired == id))
+            {
+                continue;
+            }
+            let pair = anchors.iter().find_map(|anchor| {
+                seeds.iter().find_map(|seed| {
+                    let overlap = if horizontal {
+                        (anchor.1.loc.y + anchor.1.size.h).min(seed.1.loc.y + seed.1.size.h)
+                            - anchor.1.loc.y.max(seed.1.loc.y)
+                    } else {
+                        (anchor.1.loc.x + anchor.1.size.w).min(seed.1.loc.x + seed.1.size.w)
+                            - anchor.1.loc.x.max(seed.1.loc.x)
+                    };
+                    (overlap > 0.).then_some((anchor.1, seed.1))
+                })
+            });
+            let Some((anchor, seed)) = pair else {
+                continue;
+            };
+            let delta = if horizontal {
+                Point::from((anchor.loc.x + anchor.size.w + gap - seed.loc.x, 0.))
+            } else {
+                Point::from((0., anchor.loc.y + anchor.size.h + gap - seed.loc.y))
+            };
+            let moved_seed = Rectangle::new(seed.loc + delta, seed.size);
+            let repaired_contact = if horizontal {
+                navigation::strict_contact(anchor, moved_seed, navigation::Direction::Right, gap)
+            } else {
+                navigation::strict_contact(anchor, moved_seed, navigation::Direction::Down, gap)
+            };
+            if !repaired_contact {
+                continue;
+            }
+            for id in component {
+                if let Some((_, existing)) = repairs.iter_mut().find(|(other, _)| *other == id) {
+                    *existing += delta;
+                } else {
+                    repairs.push((id, delta));
+                }
+            }
+        }
+
+        let valid = bodies.iter().all(|(id, body)| {
+            if *id == removed.0 {
+                return true;
+            }
+            let delta = repairs
+                .iter()
+                .find_map(|(other, delta)| (*other == *id).then_some(*delta))
+                .unwrap_or_default();
+            let moved = Rectangle::new(body.loc + delta, body.size);
+            bodies.iter().all(|(other_id, other)| {
+                if *other_id == removed.0 || *other_id == *id {
+                    return true;
+                }
+                let other_delta = repairs
+                    .iter()
+                    .find_map(|(candidate, delta)| (*candidate == *other_id).then_some(*delta))
+                    .unwrap_or_default();
+                let other = Rectangle::new(other.loc + other_delta, other.size);
+                moved.loc.x >= other.loc.x + other.size.w + gap
+                    || other.loc.x >= moved.loc.x + moved.size.w + gap
+                    || moved.loc.y >= other.loc.y + other.size.h + gap
+                    || other.loc.y >= moved.loc.y + moved.size.h + gap
+            })
+        });
+        valid.then_some(repairs).unwrap_or_default()
+    }
+
     pub fn remove_column_by_idx(
         &mut self,
         column_idx: usize,
         anim_config: Option<niri_config::Animation>,
+    ) -> Column<W> {
+        self.remove_column_by_idx_with_repair(column_idx, anim_config, Vec::new())
+    }
+
+    fn remove_column_by_idx_with_repair(
+        &mut self,
+        column_idx: usize,
+        anim_config: Option<niri_config::Animation>,
+        removal_repair: Vec<(ColumnId, Point<f64, Logical>)>,
     ) -> Column<W> {
         // Animate movement of the other columns.
         let movement_config = anim_config.unwrap_or(self.options.animations.window_movement.0);
@@ -1328,6 +1584,15 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
         let column = self.columns.remove(column_idx);
         self.data.remove(column_idx);
+        for (id, delta) in removal_repair {
+            let idx = self
+                .columns
+                .iter()
+                .position(|column| column.id == id)
+                .unwrap();
+            self.data[idx].position += delta;
+            self.columns[idx].animate_move_from(Point::from((-delta.x, -delta.y)));
+        }
 
         // Stop interactive resize.
         if let Some(resize) = &self.interactive_resize {
@@ -1715,109 +1980,16 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             .collect()
     }
 
-    fn spatial_components(
-        &self,
-        tiles: &[(W::Id, Rectangle<f64, Logical>, u64)],
-    ) -> Vec<Vec<W::Id>> {
-        let gap = self.options.layout.gaps;
-        let mut remaining: Vec<_> = (0..tiles.len()).collect();
-        let mut components = Vec::new();
-        while let Some(seed) = remaining.pop() {
-            let mut component = vec![seed];
-            let mut next = 0;
-            while next < component.len() {
-                let rectangle = tiles[component[next]].1;
-                let mut idx = 0;
-                while idx < remaining.len() {
-                    let other = tiles[remaining[idx]].1;
-                    let x_gap = (rectangle.loc.x - (other.loc.x + other.size.w))
-                        .max(other.loc.x - (rectangle.loc.x + rectangle.size.w))
-                        .max(0.);
-                    let y_gap = (rectangle.loc.y - (other.loc.y + other.size.h))
-                        .max(other.loc.y - (rectangle.loc.y + rectangle.size.h))
-                        .max(0.);
-                    if x_gap <= gap && y_gap <= gap {
-                        component.push(remaining.swap_remove(idx));
-                    } else {
-                        idx += 1;
-                    }
-                }
-                next += 1;
-            }
-            components.push(
-                component
-                    .into_iter()
-                    .map(|idx| tiles[idx].0.clone())
-                    .collect(),
-            );
-        }
-        components
-    }
-
-    fn collision_free_slot(
-        &self,
-        current: &W::Id,
-        rectangle: Rectangle<f64, Logical>,
-        direction: navigation::Direction,
-    ) -> Point<f64, Logical> {
-        let gap = self.options.layout.gaps;
-        let occupied = self
-            .spatial_tiles()
-            .into_iter()
-            .filter_map(|(id, rectangle, _)| (&id != current).then_some(rectangle))
-            .collect::<Vec<_>>();
-        let mut position = match direction {
-            navigation::Direction::Left => {
-                Point::from((rectangle.loc.x - rectangle.size.w - gap, rectangle.loc.y))
-            }
-            navigation::Direction::Right => {
-                Point::from((rectangle.loc.x + rectangle.size.w + gap, rectangle.loc.y))
-            }
-            navigation::Direction::Up => {
-                Point::from((rectangle.loc.x, rectangle.loc.y - rectangle.size.h - gap))
-            }
-            navigation::Direction::Down => {
-                Point::from((rectangle.loc.x, rectangle.loc.y + rectangle.size.h + gap))
-            }
-        };
-        loop {
-            let candidate = Rectangle::new(position, rectangle.size);
-            let collisions = occupied.iter().filter(|other| {
-                candidate.loc.x < other.loc.x + other.size.w + gap
-                    && other.loc.x < candidate.loc.x + candidate.size.w + gap
-                    && candidate.loc.y < other.loc.y + other.size.h + gap
-                    && other.loc.y < candidate.loc.y + candidate.size.h + gap
-            });
-            let next = match direction {
-                navigation::Direction::Left => collisions
-                    .map(|other| other.loc.x - rectangle.size.w - gap)
-                    .min_by(f64::total_cmp)
-                    .map(|x| Point::from((x, position.y))),
-                navigation::Direction::Right => collisions
-                    .map(|other| other.loc.x + other.size.w + gap)
-                    .max_by(f64::total_cmp)
-                    .map(|x| Point::from((x, position.y))),
-                navigation::Direction::Up => collisions
-                    .map(|other| other.loc.y - rectangle.size.h - gap)
-                    .min_by(f64::total_cmp)
-                    .map(|y| Point::from((position.x, y))),
-                navigation::Direction::Down => collisions
-                    .map(|other| other.loc.y + other.size.h + gap)
-                    .max_by(f64::total_cmp)
-                    .map(|y| Point::from((position.x, y))),
-            };
-            let Some(next) = next else {
-                return position;
-            };
-            position = next;
-        }
-    }
-
     fn focus_spatial(&mut self, direction: navigation::Direction) -> bool {
         let Some(current) = self.active_window().map(|window| window.id().clone()) else {
             return false;
         };
-        let Some(target) = navigation::nearest(&current, direction, &self.spatial_tiles()) else {
+        let Some(target) = navigation::nearest_contact(
+            &current,
+            direction,
+            &self.spatial_tiles(),
+            self.options.layout.gaps,
+        ) else {
             return false;
         };
         let Some((column_idx, tile_idx)) =
@@ -1991,429 +2163,103 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             return false;
         };
         let tiles = self.spatial_tiles();
+        let Some(target) =
+            navigation::nearest_contact(&current, direction, &tiles, self.options.layout.gaps)
+        else {
+            return false;
+        };
+        let locate = |id: &W::Id| {
+            self.columns
+                .iter()
+                .enumerate()
+                .find_map(|(column_idx, column)| {
+                    column.position(id).map(|tile_idx| (column_idx, tile_idx))
+                })
+                .unwrap()
+        };
+        let (current_column, current_tile) = locate(&current);
+        let (target_column, target_tile) = locate(&target);
+        if self.columns[current_column].tiles.len() != 1
+            || self.columns[target_column].tiles.len() != 1
+        {
+            return false;
+        }
+
         let current_rectangle = tiles
             .iter()
             .find_map(|(id, rectangle, _)| (id == &current).then_some(*rectangle))
             .unwrap();
-        let vertical = matches!(
-            direction,
-            navigation::Direction::Up | navigation::Direction::Down
-        );
-        let components = self.spatial_components(&tiles);
-        let component = components
+        let target_rectangle = tiles
             .iter()
-            .find(|component| component.contains(&current))
+            .find_map(|(id, rectangle, _)| (id == &target).then_some(*rectangle))
             .unwrap();
-        let cluster_tiles = tiles
-            .iter()
-            .filter(|(id, _, _)| component.contains(id))
-            .cloned()
-            .collect::<Vec<_>>();
-        let candidates = if vertical { &cluster_tiles } else { &tiles };
-        let target = navigation::nearest(&current, direction, candidates).map(|target| {
-            let position = tiles
-                .iter()
-                .find_map(|(id, rectangle, _)| (id == &target).then_some(rectangle.loc))
-                .unwrap();
-            let column = self
-                .columns
-                .iter()
-                .position(|column| column.contains(&target))
-                .unwrap();
-            (target, position, column)
-        });
-
-        let cluster_left = cluster_tiles
-            .iter()
-            .map(|(_, rectangle, _)| rectangle.loc.x)
-            .min_by(f64::total_cmp)
-            .unwrap();
-        let cluster_right = cluster_tiles
-            .iter()
-            .map(|(_, rectangle, _)| rectangle.loc.x + rectangle.size.w)
-            .max_by(f64::total_cmp)
-            .unwrap();
-        let cluster_center = (cluster_left + cluster_right) / 2.;
-        let source_row = vertical.then(|| {
-            let mut row = cluster_tiles
-                .iter()
-                .filter(|(_, rectangle, _)| rectangle.loc.y == current_rectangle.loc.y)
-                .map(|(id, rectangle, _)| (id.clone(), *rectangle))
-                .collect::<Vec<_>>();
-            row.sort_by(|a, b| a.1.loc.x.total_cmp(&b.1.loc.x));
-            row
-        });
-        let destination_row = vertical.then(|| {
-            let Some((_, position, _)) = &target else {
-                return Vec::new();
-            };
-            let mut row = cluster_tiles
-                .iter()
-                .filter(|(_, rectangle, _)| rectangle.loc.y == position.y)
-                .map(|(id, rectangle, _)| (id.clone(), *rectangle))
-                .collect::<Vec<_>>();
-            row.sort_by(|a, b| a.1.loc.x.total_cmp(&b.1.loc.x));
-            row
-        });
-        let blocker_components = vertical.then(|| {
-            let mut affected = source_row
-                .as_ref()
-                .unwrap()
-                .iter()
-                .map(|(id, _)| id.clone())
-                .collect::<Vec<_>>();
-            for (id, _) in destination_row.as_ref().unwrap() {
-                if !affected.contains(id) {
-                    affected.push(id.clone());
-                }
+        let gap = self.options.layout.gaps;
+        let mut next_current = current_rectangle;
+        let mut next_target = target_rectangle;
+        match direction {
+            navigation::Direction::Left => {
+                next_current.loc.x = target_rectangle.loc.x;
+                next_target.loc.x = target_rectangle.loc.x + current_rectangle.size.w + gap;
             }
-            for column in &self.columns {
-                if affected.iter().any(|id| column.contains(id)) {
-                    for tile in &column.tiles {
-                        let id = tile.window().id();
-                        if !affected.contains(id) {
-                            affected.push(id.clone());
-                        }
-                    }
-                }
+            navigation::Direction::Right => {
+                next_target.loc.x = current_rectangle.loc.x;
+                next_current.loc.x = current_rectangle.loc.x + target_rectangle.size.w + gap;
             }
-            let blocker_tiles = tiles
-                .iter()
-                .filter(|(id, _, _)| !affected.contains(id))
-                .cloned()
-                .collect::<Vec<_>>();
-            let mut blockers = self.spatial_components(&blocker_tiles);
-            blockers.sort_by(|a, b| {
-                let center = |component: &Vec<W::Id>| {
-                    let left = tiles
-                        .iter()
-                        .filter(|(id, _, _)| component.contains(id))
-                        .map(|(_, rectangle, _)| rectangle.loc.x)
-                        .min_by(f64::total_cmp)
-                        .unwrap();
-                    let right = tiles
-                        .iter()
-                        .filter(|(id, _, _)| component.contains(id))
-                        .map(|(_, rectangle, _)| rectangle.loc.x + rectangle.size.w)
-                        .max_by(f64::total_cmp)
-                        .unwrap();
-                    (left + right) / 2.
-                };
-                (center(a) - cluster_center)
-                    .abs()
-                    .total_cmp(&(center(b) - cluster_center).abs())
-            });
-            blockers
-        });
-
-        let source_column = self.active_column_idx;
-        let source_was_singleton = self.columns[source_column].tiles.len() == 1;
-        let mut target_position = target.as_ref().map_or_else(
-            || self.collision_free_slot(&current, current_rectangle, direction),
-            |(_, position, _)| *position,
-        );
-        let right_target_rectangle = source_was_singleton
-            .then(|| {
-                let (target, _, _) = target.as_ref()?;
-                let rectangle = tiles
-                    .iter()
-                    .find_map(|(id, rectangle, _)| (id == target).then_some(*rectangle))
-                    .unwrap();
-                let shares_source_row = rectangle.loc.y
-                    < current_rectangle.loc.y + current_rectangle.size.h
-                    && current_rectangle.loc.y < rectangle.loc.y + rectangle.size.h;
-                (shares_source_row && target_position.x > current_rectangle.loc.x)
-                    .then_some(rectangle)
-            })
-            .flatten();
-        if let Some(rectangle) = right_target_rectangle {
-            target_position.x += rectangle.size.w - current_rectangle.size.w;
+            navigation::Direction::Up => {
+                next_current.loc.y = target_rectangle.loc.y;
+                next_target.loc.y = target_rectangle.loc.y + current_rectangle.size.h + gap;
+            }
+            navigation::Direction::Down => {
+                next_target.loc.y = current_rectangle.loc.y;
+                next_current.loc.y = current_rectangle.loc.y + target_rectangle.size.h + gap;
+            }
         }
-        let target_column = target.as_ref().map_or_else(
-            || match direction {
-                navigation::Direction::Left | navigation::Direction::Up => source_column,
-                navigation::Direction::Right | navigation::Direction::Down => source_column + 1,
-            },
-            |(_, _, column)| *column,
-        );
-        let source_tile = self.columns[source_column].active_tile_idx;
-        let view_before = self.spatial_view_pos();
-        let source_origin = self.data[source_column].position
-            + self.columns[source_column].render_offset()
-            + self.columns[source_column].tile_offset(source_tile);
-        let rendered: Vec<_> = zip(&self.columns, &self.data)
-            .map(|(column, data)| (column.id, data.position + column.render_offset()))
-            .collect();
-        let inserted_at = if self.columns[source_column].tiles.len() == 1 {
-            let data = self.data[source_column];
-            let column = self.remove_column_by_idx(
-                source_column,
-                Some(self.options.animations.window_movement.0),
-            );
-            let target_column = target_column + usize::from(right_target_rectangle.is_some());
-            let target_column = target_column - usize::from(source_column < target_column);
-            self.add_column(
-                Some(target_column),
-                column,
-                false,
-                Some(self.options.animations.window_movement.0),
-            );
-            self.data[target_column] = data;
-            target_column
-        } else {
-            let removed = self.remove_tile_by_idx(
-                source_column,
-                source_tile,
-                Transaction::new(),
-                Some(self.options.animations.window_movement.0),
-            );
-            self.add_tile(
-                Some(target_column),
-                removed.tile,
-                false,
-                removed.width,
-                removed.is_full_width,
-                Some(self.options.animations.window_movement.0),
-            );
-            target_column
+        let conflicts = |a: Rectangle<f64, Logical>, b: Rectangle<f64, Logical>| {
+            a.loc.x < b.loc.x + b.size.w + gap
+                && b.loc.x < a.loc.x + a.size.w + gap
+                && a.loc.y < b.loc.y + b.size.h + gap
+                && b.loc.y < a.loc.y + a.size.h + gap
         };
-        let inserted_tile_offset =
-            self.columns[inserted_at].tile_offset(self.columns[inserted_at].active_tile_idx);
-        self.data[inserted_at].position = target_position - inserted_tile_offset;
-        if vertical {
-            let gap = self.options.layout.gaps;
-            let mut source_ids = source_row
-                .as_ref()
-                .unwrap()
-                .iter()
-                .filter(|(id, _)| id != &current)
-                .map(|(id, _)| id.clone())
-                .collect::<Vec<_>>();
-            let destination = destination_row.as_ref().unwrap();
-            let mut destination_ids = destination
-                .iter()
-                .filter(|(id, _)| id != &current)
-                .map(|(id, _)| id.clone())
-                .collect::<Vec<_>>();
-            let current_center = current_rectangle.loc.x + current_rectangle.size.w / 2.;
-            let source_idx = source_row
-                .as_ref()
-                .unwrap()
-                .iter()
-                .position(|(id, _)| id == &current)
-                .unwrap();
-            let source_is_right = current_center > cluster_center
-                || (current_center == cluster_center
-                    && source_idx * 2 >= source_row.as_ref().unwrap().len());
-            let insert_idx = if destination_ids.len() % 2 == 0 {
-                destination_ids.len() / 2
-            } else if source_is_right {
-                destination
-                    .iter()
-                    .filter(|(id, _)| id != &current)
-                    .take_while(|(_, rectangle)| {
-                        rectangle.loc.x + rectangle.size.w / 2. <= current_center
-                    })
-                    .count()
-            } else {
-                destination
-                    .iter()
-                    .filter(|(id, _)| id != &current)
-                    .take_while(|(_, rectangle)| {
-                        rectangle.loc.x + rectangle.size.w / 2. < current_center
-                    })
-                    .count()
-            };
-            destination_ids.insert(insert_idx, current.clone());
-
-            let destination_y = target
-                .as_ref()
-                .map_or(target_position.y, |(_, position, _)| position.y);
-            let rows = [
-                (&mut source_ids, current_rectangle.loc.y),
-                (&mut destination_ids, destination_y),
-            ];
-            for (ids, y) in rows {
-                if ids.is_empty() {
-                    continue;
-                }
-                let current_tiles = self.spatial_tiles();
-                let total_width = ids
-                    .iter()
-                    .map(|id| {
-                        current_tiles
-                            .iter()
-                            .find(|(other, _, _)| other == id)
-                            .unwrap()
-                            .1
-                            .size
-                            .w
-                    })
-                    .sum::<f64>()
-                    + gap * (ids.len() - 1) as f64;
-                let mut x = cluster_center - total_width / 2.;
-                for id in ids.iter() {
-                    let (rectangle, column_idx, tile_idx) = {
-                        let (rectangle, _) = current_tiles
-                            .iter()
-                            .find_map(|(other, rectangle, order)| {
-                                (other == id).then_some((*rectangle, *order))
-                            })
-                            .unwrap();
-                        let column_idx = self
-                            .columns
-                            .iter()
-                            .position(|column| column.contains(id))
-                            .unwrap();
-                        let tile_idx = self.columns[column_idx].position(id).unwrap();
-                        (rectangle, column_idx, tile_idx)
-                    };
-                    let offset = self.columns[column_idx].tile_offset(tile_idx);
-                    self.data[column_idx].position.x = x - offset.x;
-                    if id == &current {
-                        self.data[column_idx].position.y = y - offset.y;
-                    }
-                    x += rectangle.size.w + gap;
-                }
-            }
-
-            let mut affected_ids = source_ids;
-            for id in destination_ids {
-                if !affected_ids.contains(&id) {
-                    affected_ids.push(id);
-                }
-            }
-            for blocker in blocker_components.as_ref().unwrap() {
-                let current_tiles = self.spatial_tiles();
-                let affected = current_tiles
-                    .iter()
-                    .filter(|(id, _, _)| affected_ids.contains(id))
-                    .map(|(_, rectangle, _)| *rectangle)
-                    .collect::<Vec<_>>();
-                let blocked = current_tiles
-                    .iter()
-                    .filter(|(id, _, _)| blocker.contains(id))
-                    .map(|(_, rectangle, _)| *rectangle)
-                    .collect::<Vec<_>>();
-                let blocker_center = blocked
-                    .iter()
-                    .map(|rectangle| rectangle.loc.x + rectangle.size.w / 2.)
-                    .sum::<f64>()
-                    / blocked.len() as f64;
-                let push_right = blocker_center >= cluster_center;
-                let mut shift: f64 = 0.;
-                for placed in &affected {
-                    for rectangle in &blocked {
-                        let overlaps_y = placed.loc.y < rectangle.loc.y + rectangle.size.h
-                            && rectangle.loc.y < placed.loc.y + placed.size.h;
-                        if !overlaps_y {
-                            continue;
-                        }
-                        if push_right {
-                            shift = shift.max(placed.loc.x + placed.size.w + gap - rectangle.loc.x);
-                        } else {
-                            shift = shift
-                                .min(placed.loc.x - gap - (rectangle.loc.x + rectangle.size.w));
-                        }
-                    }
-                }
-                if (push_right && shift > 0.) || (!push_right && shift < 0.) {
-                    for (column, data) in zip(&self.columns, &mut self.data) {
-                        if blocker.iter().any(|id| column.contains(id)) {
-                            data.position.x += shift;
-                        }
-                    }
-                    for id in blocker {
-                        if !affected_ids.contains(id) {
-                            affected_ids.push(id.clone());
-                        }
-                    }
-                }
-            }
-        } else {
-            if source_was_singleton {
-                let collapse = current_rectangle.size.w + self.options.layout.gaps;
-                for (idx, (column, data)) in zip(&self.columns, &mut self.data).enumerate() {
-                    if idx == inserted_at {
-                        continue;
-                    }
-                    let height = column
-                        .tiles()
-                        .map(|(tile, offset)| offset.y + tile.tile_size().h)
-                        .fold(0., f64::max);
-                    let shares_source_row = data.position.y
-                        < current_rectangle.loc.y + current_rectangle.size.h
-                        && current_rectangle.loc.y < data.position.y + height;
-                    if shares_source_row
-                        && data.position.x
-                            >= current_rectangle.loc.x
-                                + current_rectangle.size.w
-                                + self.options.layout.gaps
-                    {
-                        data.position.x -= collapse;
-                    }
-                }
-            }
-            if target.is_some() {
-                let inserted_height = self.columns[inserted_at]
-                    .tiles()
-                    .map(|(tile, offset)| offset.y + tile.tile_size().h)
-                    .fold(0., f64::max);
-                let inserted_width = self.data[inserted_at].width;
-                let shift = inserted_width + self.options.layout.gaps;
-                for (column, data) in zip(
-                    &self.columns[inserted_at + 1..],
-                    &mut self.data[inserted_at + 1..],
-                ) {
-                    let height = column
-                        .tiles()
-                        .map(|(tile, offset)| offset.y + tile.tile_size().h)
-                        .fold(0., f64::max);
-                    let shares_row = data.position.y < target_position.y + inserted_height
-                        && target_position.y < data.position.y + height;
-                    if shares_row && data.position.x >= target_position.x {
-                        data.position.x += shift;
-                    }
-                }
-            }
-        }
-
-        if vertical {
-            self.placement.remember(&self.spatial_items());
-        } else {
-            self.placement.invalidate();
-            self.arrange_spatial(false);
-        }
-        for (column, data) in zip(&mut self.columns, &self.data) {
-            column.move_x_animation = None;
-            column.move_y_animation = None;
-            if let Some((_, previous)) = rendered.iter().find(|(id, _)| id == &column.id) {
-                column.animate_move_from(*previous - data.position);
-            }
-        }
-        if !rendered
-            .iter()
-            .any(|(id, _)| id == &self.columns[inserted_at].id)
+        if conflicts(next_current, next_target)
+            || tiles.iter().any(|(id, rectangle, _)| {
+                id != &current
+                    && id != &target
+                    && (conflicts(next_current, *rectangle) || conflicts(next_target, *rectangle))
+            })
         {
-            let target = self.data[inserted_at].position + self.columns[inserted_at].tile_offset(0);
-            self.columns[inserted_at].tiles[0].animate_move_from(source_origin - target);
+            return false;
         }
 
-        self.active_column_idx = inserted_at;
-        self.activate_prev_column_on_removal = None;
-        self.view_offset_to_restore = None;
-        self.interactive_resize = None;
+        let view_before = self.spatial_view_pos();
+        let current_rendered =
+            self.data[current_column].position + self.columns[current_column].render_offset();
+        let target_rendered =
+            self.data[target_column].position + self.columns[target_column].render_offset();
+        let current_offset = self.columns[current_column].tile_offset(current_tile);
+        let target_offset = self.columns[target_column].tile_offset(target_tile);
+        self.data[current_column].position = next_current.loc - current_offset;
+        self.data[target_column].position = next_target.loc - target_offset;
+        self.columns[current_column].move_x_animation = None;
+        self.columns[current_column].move_y_animation = None;
+        self.columns[target_column].move_x_animation = None;
+        self.columns[target_column].move_y_animation = None;
+        self.columns[current_column]
+            .animate_move_from(current_rendered - self.data[current_column].position);
+        self.columns[target_column]
+            .animate_move_from(target_rendered - self.data[target_column].position);
+        self.columns.swap(current_column, target_column);
+        self.data.swap(current_column, target_column);
+        self.active_column_idx = target_column;
+        self.placement.remember(&self.spatial_items());
+
         let camera_config = self.options.animations.horizontal_view_movement.0;
         let target_x =
-            self.compute_new_view_offset_for_column(None, inserted_at, Some(inserted_at));
-        let active_tile = self.columns[inserted_at].active_tile_idx;
-        let (_, tile_offset) = self.columns[inserted_at].tiles().nth(active_tile).unwrap();
-        let tile = &self.columns[inserted_at].tiles[active_tile];
-        let target_y = self.data[inserted_at].position.y + tile_offset.y + tile.tile_size().h / 2.
-            - self.view_size.h / 2.;
+            self.compute_new_view_offset_for_column(None, target_column, Some(target_column));
+        let tile = &self.columns[target_column].tiles[current_tile];
+        let target_y = next_current.loc.y + tile.tile_size().h / 2. - self.view_size.h / 2.;
         self.view_offset = ViewOffset::Animation(Animation::new(
             self.clock.clone(),
-            view_before.x - self.data[inserted_at].position.x,
+            view_before.x - self.data[target_column].position.x,
             target_x,
             0.,
             camera_config,
