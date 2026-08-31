@@ -1157,37 +1157,25 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             self.scale,
             self.options.clone(),
         );
-        self.data.insert(idx, ColumnData::new(&column));
+        let mut data = ColumnData::new(&column);
+        if let Some(preferred) = insertion_position {
+            let size = Size::from((data.width, column.tiles[0].tile_size().h));
+            let occupied = self
+                .spatial_items()
+                .into_iter()
+                .map(|item| Rectangle::new(item.current.unwrap(), item.size))
+                .collect::<Vec<_>>();
+            data.position =
+                placement::place_new(preferred, size, self.options.layout.gaps, &occupied);
+        }
+        self.data.insert(idx, data);
         self.columns.insert(idx, column);
 
         if !was_empty && idx <= self.active_column_idx {
             self.active_column_idx += 1;
         }
-
-        if let Some(position) = insertion_position {
-            self.data[idx].position = position;
-            let inserted_height = self.columns[idx]
-                .tiles()
-                .map(|(tile, offset)| offset.y + tile.tile_size().h)
-                .fold(0., f64::max);
-            let shift = self.data[idx].width + self.options.layout.gaps;
-            for (column, data) in zip(&mut self.columns[idx + 1..], &mut self.data[idx + 1..]) {
-                let height = column
-                    .tiles()
-                    .map(|(tile, offset)| offset.y + tile.tile_size().h)
-                    .fold(0., f64::max);
-                let shares_row = data.position.y < position.y + inserted_height
-                    && position.y < data.position.y + height;
-                if shares_row && data.position.x >= position.x {
-                    data.position.x += shift;
-                    column.animate_move_x_from_with_config(
-                        -shift,
-                        anim_config.unwrap_or(self.options.animations.window_movement.0),
-                    );
-                }
-            }
-            self.placement.invalidate();
-            self.arrange_spatial(false);
+        if insertion_position.is_some() {
+            self.placement.remember(&self.spatial_items());
         }
 
         if activate {

@@ -26,10 +26,6 @@ pub(super) struct State {
 }
 
 impl State {
-    pub fn invalidate(&mut self) {
-        self.items.clear();
-    }
-
     pub fn remember(&mut self, items: &[Item]) {
         self.items = items
             .iter()
@@ -188,4 +184,28 @@ fn free(
             || rectangle.loc.y + rectangle.size.h + gap <= other.loc.y
             || other.loc.y + other.size.h + gap <= rectangle.loc.y
     })
+}
+
+pub(super) fn place_new(
+    preferred: Point<f64, Logical>,
+    size: Size<f64, Logical>,
+    gap: f64,
+    occupied: &[Rectangle<f64, Logical>],
+) -> Point<f64, Logical> {
+    if free(Rectangle::new(preferred, size), gap, occupied) {
+        return preferred;
+    }
+    occupied
+        .iter()
+        .flat_map(|other| {
+            [
+                Point::from((other.loc.x + other.size.w + gap, other.loc.y)),
+                Point::from((other.loc.x - size.w - gap, other.loc.y)),
+                Point::from((other.loc.x, other.loc.y + other.size.h + gap)),
+                Point::from((other.loc.x, other.loc.y - size.h - gap)),
+            ]
+        })
+        .filter(|position| free(Rectangle::new(*position, size), gap, occupied))
+        .min_by(|a, b| distance(*a, preferred).total_cmp(&distance(*b, preferred)))
+        .unwrap()
 }

@@ -2751,6 +2751,85 @@ fn bridge_removal_reconnects_horizontal_and_vertical_components() {
 }
 
 #[test]
+fn public_spawn_preserves_repaired_w5_bridge() {
+    let mut layout = singleton_grid_fixture();
+    position_contact(&mut layout, 5, 4, false);
+    position_contact(&mut layout, 6, 5, false);
+    layout.set_window_width(Some(&4), SizeChange::AdjustFixed(500));
+    Op::Communicate(4).apply(&mut layout);
+    layout.refresh(true);
+    Op::CloseWindow(5).apply(&mut layout);
+    Op::CompleteAnimations.apply(&mut layout);
+    let before = ipc_rectangles(&layout);
+
+    Op::AddWindow {
+        params: TestWindowParams::new(10),
+    }
+    .apply(&mut layout);
+    Op::CompleteAnimations.apply(&mut layout);
+    let after = ipc_rectangles(&layout);
+    for (id, rectangle) in &before {
+        assert_eq!(after[id].size, rectangle.size);
+        assert_eq!(
+            after[id].loc - after[&1].loc,
+            rectangle.loc - before[&1].loc
+        );
+    }
+    let spawned = after[&10];
+    let gap = layout.options.layout.gaps;
+    assert!(after.iter().filter(|(id, _)| **id != 10).any(|(_, other)| {
+        let overlap_x = (other.loc.x + other.size.w).min(spawned.loc.x + spawned.size.w)
+            - other.loc.x.max(spawned.loc.x);
+        let overlap_y = (other.loc.y + other.size.h).min(spawned.loc.y + spawned.size.h)
+            - other.loc.y.max(spawned.loc.y);
+        (overlap_y > 0.
+            && ((spawned.loc.x - other.loc.x - other.size.w - gap).abs() < 0.001
+                || (other.loc.x - spawned.loc.x - spawned.size.w - gap).abs() < 0.001))
+            || (overlap_x > 0.
+                && ((spawned.loc.y - other.loc.y - other.size.h - gap).abs() < 0.001
+                    || (other.loc.y - spawned.loc.y - spawned.size.h - gap).abs() < 0.001))
+    }));
+}
+
+#[test]
+fn public_spawn_uses_deterministic_contact_when_right_is_blocked() {
+    let mut layout = check_ops([Op::AddOutput(1)]);
+    for id in 1..=2 {
+        Op::AddWindow {
+            params: TestWindowParams::new(id),
+        }
+        .apply(&mut layout);
+    }
+    layout.set_window_width(Some(&1), SizeChange::SetFixed(320));
+    layout.set_window_height(Some(&1), SizeChange::SetFixed(180));
+    layout.set_window_width(Some(&2), SizeChange::SetFixed(200));
+    for id in 1..=2 {
+        Op::Communicate(id).apply(&mut layout);
+    }
+    layout.refresh(true);
+    layout.activate_window(&1);
+    Op::CompleteAnimations.apply(&mut layout);
+    let before = ipc_rectangles(&layout);
+
+    Op::AddWindow {
+        params: TestWindowParams::new(3),
+    }
+    .apply(&mut layout);
+    Op::CompleteAnimations.apply(&mut layout);
+    let after = ipc_rectangles(&layout);
+    assert_eq!(after[&1].size, before[&1].size);
+    assert_eq!(
+        after[&2].loc - after[&1].loc,
+        before[&2].loc - before[&1].loc
+    );
+    assert_eq!(after[&3].loc.y, after[&2].loc.y);
+    assert_eq!(
+        after[&3].loc.x,
+        after[&2].loc.x + after[&2].size.w + layout.options.layout.gaps
+    );
+}
+
+#[test]
 fn edge_removal_does_not_repair_without_two_sides() {
     for removed in [1, 3] {
         let mut layout = check_ops([
