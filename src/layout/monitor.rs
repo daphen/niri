@@ -28,7 +28,9 @@ use crate::render_helpers::xray::XrayPos;
 use crate::render_helpers::RenderCtx;
 use crate::rubber_band::RubberBand;
 use crate::utils::transaction::Transaction;
-use crate::utils::{output_size, round_logical_in_physical, ResizeEdge};
+use crate::utils::{
+    output_size, round_logical_in_physical, round_logical_in_physical_max1, ResizeEdge,
+};
 
 /// Amount of touchpad movement to scroll the height of one workspace.
 const WORKSPACE_GESTURE_MOVEMENT: f64 = 1200.;
@@ -1371,6 +1373,15 @@ impl<W: LayoutElement> Monitor<W> {
         self.workspace_size(zoom) + Size::from((0., gap))
     }
 
+    fn compact_workspace_size(&self, zoom: f64, progress: f64) -> Size<f64, Logical> {
+        let mut size = self.workspace_size(zoom);
+        let repeated_inset =
+            self.view_size.h - self.working_area.size.h + self.options.layout.gaps * 2.;
+        let content_height = (self.view_size.h - repeated_inset * progress).max(0.) * zoom;
+        size.h = round_logical_in_physical_max1(self.scale.fractional_scale(), content_height);
+        size
+    }
+
     pub fn overview_zoom(&self) -> f64 {
         let progress = self.overview_progress.as_ref().map(|p| p.value());
         compute_overview_zoom(&self.options, progress)
@@ -1459,10 +1470,11 @@ impl<W: LayoutElement> Monitor<W> {
                 // - first_y = -switch_anim.value() * from_height + to * (from_height - current_height)
                 let from = progress_anim.from();
                 let from_zoom = compute_overview_zoom(&self.options, Some(from));
-                let from_ws_height_with_gap = self.workspace_size_with_gap(from_zoom).h;
+                let from_ws_height_with_gap = self.compact_workspace_size(from_zoom, from).h;
 
+                let progress = progress_anim.value();
                 let zoom = self.overview_zoom();
-                let ws_height_with_gap = self.workspace_size_with_gap(zoom).h;
+                let ws_height_with_gap = self.compact_workspace_size(zoom, progress).h;
 
                 let first_ws_y = -switch_anim.value() * from_ws_height_with_gap
                     + switch_anim.to() * (from_ws_height_with_gap - ws_height_with_gap);
@@ -1483,15 +1495,23 @@ impl<W: LayoutElement> Monitor<W> {
         let zoom = self.overview_zoom();
 
         let ws_size = self.workspace_size(zoom);
-        let gap = self.workspace_gap(zoom);
-        let ws_height_with_gap = ws_size.h + gap;
+        let render_idx = self.workspace_render_idx();
+        let switch_progress =
+            (std::f64::consts::PI * (render_idx - render_idx.round()).abs()).sin();
+        let overview_progress = self
+            .overview_progress
+            .as_ref()
+            .map_or(0., |progress| progress.value());
+        let ws_height_with_gap = self
+            .compact_workspace_size(zoom, switch_progress.max(overview_progress))
+            .h;
 
         let static_offset = (self.view_size.to_point() - ws_size.to_point()).downscale(2.);
         let static_offset = static_offset
             .to_physical_precise_round(scale)
             .to_logical(scale);
 
-        let first_ws_y = -self.workspace_render_idx() * ws_height_with_gap;
+        let first_ws_y = -render_idx * ws_height_with_gap;
         let first_ws_y = round_logical_in_physical(scale, first_ws_y);
 
         // Return position for one-past-last workspace too.
