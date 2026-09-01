@@ -165,6 +165,11 @@ struct PresentationGesture {
     start: Point<f64, Logical>,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct SceneTransformSnapshot {
+    translation: Point<f64, Logical>,
+}
+
 impl CameraAxis {
     fn value(&self) -> f64 {
         match self {
@@ -796,7 +801,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         new_view_offset: f64,
         config: niri_config::Animation,
     ) {
-        let old_visual = self.active_tile_presentation_pos();
+        let scene = self.scene_transform_snapshot();
         let new_col_x = self.column_x(idx);
         let old_col_x = self.column_x(self.active_column_idx);
         let offset_delta = old_col_x - new_col_x;
@@ -826,14 +831,12 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             }
             _ => {
                 self.view_offset = ViewOffset::Static(new_view_offset);
-                let Some(old_visual) = old_visual else {
+                let Some(scene) = scene else {
                     return;
                 };
-                let Some(native) = self.active_tile_native_pos() else {
-                    return;
-                };
+                let from = self.camera_for_scene_transform(scene);
                 self.presentation_camera.animate(
-                    old_visual - native,
+                    from,
                     self.focused_camera_target(),
                     Point::default(),
                     self.clock.clone(),
@@ -879,12 +882,12 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     }
 
     fn activate_column(&mut self, idx: usize) {
-        let old_visual = self.active_tile_presentation_pos();
+        let scene = self.scene_transform_snapshot();
         self.activate_column_with_anim_config(
             idx,
             self.options.animations.horizontal_view_movement.0,
         );
-        self.finish_presentation_retarget(old_visual, Point::default());
+        self.finish_presentation_retarget(scene, Point::default());
     }
 
     fn activate_column_with_anim_config(&mut self, idx: usize, config: niri_config::Animation) {
@@ -1010,9 +1013,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         tile: Tile<W>,
         activate: bool,
     ) {
-        let old_visual = activate
-            .then(|| self.active_tile_presentation_pos())
-            .flatten();
+        let scene = activate.then(|| self.scene_transform_snapshot()).flatten();
         let prev_next_x = self.column_x(col_idx + 1);
 
         let target_column = &mut self.columns[col_idx];
@@ -1064,7 +1065,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         }
 
         if activate {
-            self.finish_presentation_retarget(old_visual, Point::default());
+            self.finish_presentation_retarget(scene, Point::default());
         }
     }
 
@@ -1094,9 +1095,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         anim_config: Option<niri_config::Animation>,
     ) {
         let was_empty = self.columns.is_empty();
-        let old_visual = activate
-            .then(|| self.active_tile_presentation_pos())
-            .flatten();
+        let scene = activate.then(|| self.scene_transform_snapshot()).flatten();
 
         let idx = idx.unwrap_or_else(|| {
             if was_empty {
@@ -1149,7 +1148,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 anim_config.unwrap_or(self.options.animations.horizontal_view_movement.0);
             self.activate_column_with_anim_config(idx, anim_config);
             self.activate_prev_column_on_removal = prev_offset;
-            self.finish_presentation_retarget(old_visual, Point::default());
+            self.finish_presentation_retarget(scene, Point::default());
         }
     }
 
@@ -1188,8 +1187,8 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     ) -> RemovedTile<W> {
         let removing_active = column_idx == self.active_column_idx
             && tile_idx == self.columns[column_idx].active_tile_idx;
-        let old_visual = removing_active
-            .then(|| self.active_tile_presentation_pos())
+        let scene = removing_active
+            .then(|| self.scene_transform_snapshot())
             .flatten();
 
         // If this is the only tile in the column, remove the whole column.
@@ -1285,7 +1284,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         }
 
         if removing_active {
-            self.finish_presentation_retarget(old_visual, Point::default());
+            self.finish_presentation_retarget(scene, Point::default());
         }
         tile
     }
@@ -1304,8 +1303,8 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         anim_config: Option<niri_config::Animation>,
     ) -> Column<W> {
         let removing_active = column_idx == self.active_column_idx;
-        let old_visual = removing_active
-            .then(|| self.active_tile_presentation_pos())
+        let scene = removing_active
+            .then(|| self.scene_transform_snapshot())
             .flatten();
 
         // Animate movement of the other columns.
@@ -1388,7 +1387,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         }
 
         if removing_active {
-            self.finish_presentation_retarget(old_visual, Point::default());
+            self.finish_presentation_retarget(scene, Point::default());
         }
         column
     }
@@ -1584,13 +1583,13 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         let Some(column_idx) = self.columns.iter().position(|col| col.contains(window)) else {
             return false;
         };
-        let old_visual = self.active_tile_presentation_pos();
+        let scene = self.scene_transform_snapshot();
         self.columns[column_idx].activate_window(window);
         self.activate_column_with_anim_config(
             column_idx,
             self.options.animations.horizontal_view_movement.0,
         );
-        self.finish_presentation_retarget(old_visual, Point::default());
+        self.finish_presentation_retarget(scene, Point::default());
         true
     }
 
@@ -1741,9 +1740,9 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             return;
         }
 
-        let old_visual = self.active_tile_presentation_pos();
+        let scene = self.scene_transform_snapshot();
         self.columns[self.active_column_idx].focus_index(index);
-        self.finish_presentation_retarget(old_visual, Point::default());
+        self.finish_presentation_retarget(scene, Point::default());
     }
 
     pub fn focus_down(&mut self) -> bool {
@@ -1751,10 +1750,10 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             return false;
         }
 
-        let old_visual = self.active_tile_presentation_pos();
+        let scene = self.scene_transform_snapshot();
         let changed = self.columns[self.active_column_idx].focus_down();
         if changed {
-            self.finish_presentation_retarget(old_visual, Point::default());
+            self.finish_presentation_retarget(scene, Point::default());
         }
         changed
     }
@@ -1764,10 +1763,10 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             return false;
         }
 
-        let old_visual = self.active_tile_presentation_pos();
+        let scene = self.scene_transform_snapshot();
         let changed = self.columns[self.active_column_idx].focus_up();
         if changed {
-            self.finish_presentation_retarget(old_visual, Point::default());
+            self.finish_presentation_retarget(scene, Point::default());
         }
         changed
     }
@@ -1801,9 +1800,9 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             return;
         }
 
-        let old_visual = self.active_tile_presentation_pos();
+        let scene = self.scene_transform_snapshot();
         self.columns[self.active_column_idx].focus_top();
-        self.finish_presentation_retarget(old_visual, Point::default());
+        self.finish_presentation_retarget(scene, Point::default());
     }
 
     pub fn focus_bottom(&mut self) {
@@ -1811,9 +1810,9 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             return;
         }
 
-        let old_visual = self.active_tile_presentation_pos();
+        let scene = self.scene_transform_snapshot();
         self.columns[self.active_column_idx].focus_bottom();
-        self.finish_presentation_retarget(old_visual, Point::default());
+        self.finish_presentation_retarget(scene, Point::default());
     }
 
     pub fn move_column_to_index(&mut self, index: usize) {
@@ -2461,8 +2460,14 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         )
     }
 
-    fn active_tile_presentation_pos(&self) -> Option<Point<f64, Logical>> {
-        Some(self.active_tile_native_pos()? + self.presentation_offset())
+    fn scene_transform_snapshot(&self) -> Option<SceneTransformSnapshot> {
+        (!self.columns.is_empty()).then(|| SceneTransformSnapshot {
+            translation: Point::from((-self.view_pos(), 0.)) + self.presentation_offset(),
+        })
+    }
+
+    fn camera_for_scene_transform(&self, scene: SceneTransformSnapshot) -> Point<f64, Logical> {
+        scene.translation + Point::from((self.view_pos(), 0.))
     }
 
     fn focused_camera_target(&self) -> Point<f64, Logical> {
@@ -2483,7 +2488,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
     fn finish_presentation_retarget(
         &mut self,
-        old_visual: Option<Point<f64, Logical>>,
+        scene: Option<SceneTransformSnapshot>,
         velocity: Point<f64, Logical>,
     ) {
         if !self.presentation_camera_enabled {
@@ -2492,17 +2497,15 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         }
         let target_view_offset = self.view_offset.target();
         self.view_offset = ViewOffset::Static(target_view_offset);
-        let Some(old_visual) = old_visual else {
+        let Some(scene) = scene else {
             let target = self.focused_camera_target();
             self.presentation_camera.x = CameraAxis::Static(target.x);
             self.presentation_camera.y = CameraAxis::Static(target.y);
             return;
         };
-        let Some(native) = self.active_tile_native_pos() else {
-            return;
-        };
+        let from = self.camera_for_scene_transform(scene);
         self.presentation_camera.animate(
-            old_visual - native,
+            from,
             self.focused_camera_target(),
             velocity,
             self.clock.clone(),
@@ -3334,10 +3337,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         ));
 
         if let Some(target) = target {
-            let old_visual = self
-                .tiles_with_render_positions()
-                .find(|(tile, _, visible)| *visible && tile.window().id() == &target)
-                .map(|(_, pos, _)| pos);
+            let scene = self.scene_transform_snapshot();
             let column_idx = self
                 .columns
                 .iter()
@@ -3348,7 +3348,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 column_idx,
                 self.options.animations.horizontal_view_movement.0,
             );
-            self.finish_presentation_retarget(old_visual, velocity);
+            self.finish_presentation_retarget(scene, velocity);
         }
         true
     }

@@ -3846,8 +3846,34 @@ fn tile_render_pos(layout: &Layout<TestWindow>, id: usize) -> Point<f64, Logical
         .1
 }
 
+fn tiled_render_positions(layout: &Layout<TestWindow>) -> Vec<(usize, Point<f64, Logical>)> {
+    let mut positions: Vec<_> = layout
+        .active_workspace()
+        .unwrap()
+        .scrolling()
+        .tiles_with_render_positions()
+        .map(|(tile, pos, _)| (*tile.window().id(), pos))
+        .collect();
+    positions.sort_by_key(|(id, _)| *id);
+    positions
+}
+
+fn assert_focused_camera_settles(layout: &mut Layout<TestWindow>) {
+    Op::CompleteAnimations.apply(layout);
+    assert_eq!(active_window_visual_center_y(layout), 360.);
+    assert_eq!(
+        layout
+            .active_workspace()
+            .unwrap()
+            .scrolling()
+            .presentation_offset()
+            .x,
+        0.
+    );
+}
+
 #[test]
-fn focus_transition_uses_presentation_camera_only() {
+fn activate_window_preserves_tiled_scene_then_centers_focus() {
     let mut layout = check_ops([
         Op::AddOutput(1),
         Op::AddWindow {
@@ -3858,25 +3884,75 @@ fn focus_transition_uses_presentation_camera_only() {
         },
         Op::CompleteAnimations,
     ]);
-    let old_visual = tile_render_pos(&layout, 2);
+    let before = tiled_render_positions(&layout);
+
+    layout.activate_window(&1);
+
+    assert_eq!(tiled_render_positions(&layout), before);
+    assert_focused_camera_settles(&mut layout);
+}
+
+#[test]
+fn cross_column_focus_preserves_tiled_scene_then_centers_focus() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::CompleteAnimations,
+    ]);
+    let before = tiled_render_positions(&layout);
 
     layout.focus_left();
 
     let scrolling = layout.active_workspace().unwrap().scrolling();
     assert_eq!(scrolling.view_pos(), scrolling.target_view_pos());
-    assert_eq!(tile_render_pos(&layout, 1), old_visual);
-    assert_ne!(scrolling.presentation_offset().x, 0.);
+    assert_eq!(tiled_render_positions(&layout), before);
+    assert_focused_camera_settles(&mut layout);
+}
 
-    Op::CompleteAnimations.apply(&mut layout);
-    assert_eq!(
-        layout
-            .active_workspace()
-            .unwrap()
-            .scrolling()
-            .presentation_offset()
-            .x,
-        0.
-    );
+#[test]
+fn same_column_focus_preserves_tiled_scene_then_centers_focus() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::ConsumeWindowIntoColumn,
+        Op::CompleteAnimations,
+    ]);
+    let before = tiled_render_positions(&layout);
+
+    layout.focus_up();
+
+    assert_eq!(tiled_render_positions(&layout), before);
+    assert_focused_camera_settles(&mut layout);
+}
+
+#[test]
+fn active_removal_preserves_surviving_tiled_scene_then_centers_focus() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::CompleteAnimations,
+    ]);
+    let before = tile_render_pos(&layout, 1);
+
+    layout.remove_window(&2, Transaction::new());
+
+    assert_eq!(tile_render_pos(&layout, 1), before);
+    assert_focused_camera_settles(&mut layout);
 }
 
 fn active_window_visual_center_y(layout: &Layout<TestWindow>) -> f64 {
