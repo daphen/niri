@@ -3697,6 +3697,106 @@ fn expel_pending_left_from_fullscreen_tabbed_column() {
     check_ops(ops);
 }
 
+fn pan_test_layout(overview: bool) -> Layout<TestWindow> {
+    let mut ops = vec![
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::MoveWindowToWorkspaceDown(true),
+        Op::AddWindow {
+            params: TestWindowParams::new(3),
+        },
+    ];
+    if overview {
+        ops.extend([Op::ToggleOverview, Op::CompleteAnimations]);
+    }
+    check_ops(ops)
+}
+
+fn pan_state(layout: &Layout<TestWindow>, owner: WorkspaceId) -> (f64, f64) {
+    let MonitorSet::Normal { monitors, .. } = &layout.monitor_set else {
+        unreachable!()
+    };
+    let monitor = &monitors[0];
+    let workspace = monitor
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.id() == owner)
+        .unwrap();
+    (
+        workspace.scrolling().view_offset().current(),
+        monitor.workspace_render_idx(),
+    )
+}
+
+#[test]
+fn three_finger_pan_drives_both_native_axes() {
+    for overview in [false, true] {
+        for (delta_x, delta_y) in [(160., 0.), (0., -1200.), (160., -1200.), (0., 0.)] {
+            let mut layout = pan_test_layout(overview);
+            let MonitorSet::Normal { monitors, .. } = &layout.monitor_set else {
+                unreachable!()
+            };
+            let output = monitors[0].output.clone();
+            let workspace_idx = monitors[0].active_workspace_idx;
+            let owner = monitors[0].active_workspace_ref().id();
+            let before = pan_state(&layout, owner);
+
+            layout.view_offset_gesture_begin(&output, Some(workspace_idx), true);
+            layout.workspace_switch_gesture_begin(&output, true);
+            layout.view_offset_gesture_update(delta_x, Duration::from_millis(10), true);
+            layout.workspace_switch_gesture_update(delta_y, Duration::from_millis(10), true);
+
+            let during = pan_state(&layout, owner);
+            assert_eq!(during.0 != before.0, delta_x != 0.);
+            assert_eq!(during.1 != before.1, delta_y != 0.);
+            assert!(layout.workspace_switch_gesture_end(Some(true)).is_some());
+            assert!(layout.view_offset_gesture_end(Some(true)).is_some());
+            layout.verify_invariants();
+        }
+    }
+}
+
+#[test]
+fn diagonal_pan_keeps_horizontal_gesture_on_starting_workspace() {
+    for overview in [false, true] {
+        let mut layout = pan_test_layout(overview);
+        let MonitorSet::Normal { monitors, .. } = &layout.monitor_set else {
+            unreachable!()
+        };
+        let output = monitors[0].output.clone();
+        let workspace_idx = monitors[0].active_workspace_idx;
+        let owner = monitors[0].active_workspace_ref().id();
+        let window_ids: Vec<_> = layout.windows().map(|(_, window)| *window.id()).collect();
+        let before = pan_state(&layout, owner).0;
+
+        layout.view_offset_gesture_begin(&output, Some(workspace_idx), true);
+        layout.workspace_switch_gesture_begin(&output, true);
+        layout.workspace_switch_gesture_update(-1200., Duration::from_millis(10), true);
+        layout.view_offset_gesture_update(160., Duration::from_millis(20), true);
+        layout.workspace_switch_gesture_end(Some(true));
+
+        let MonitorSet::Normal { monitors, .. } = &layout.monitor_set else {
+            unreachable!()
+        };
+        assert_ne!(monitors[0].active_workspace_ref().id(), owner);
+        assert_ne!(pan_state(&layout, owner).0, before);
+        assert!(layout.view_offset_gesture_end(Some(true)).is_some());
+        assert_eq!(
+            layout
+                .windows()
+                .map(|(_, window)| *window.id())
+                .collect::<Vec<_>>(),
+            window_ids
+        );
+        layout.verify_invariants();
+    }
+}
+
 #[test]
 fn adjacent_workspaces_have_zero_gap_in_overview() {
     let layout = check_ops([

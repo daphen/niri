@@ -52,13 +52,9 @@ Switch workspaces by holding <kbd>Mod</kbd> and the middle mouse button (or the 
 
 ### Touchpad
 
-#### Workspace Switch
+#### Two-Dimensional View Movement
 
-Switch workspaces with three-finger vertical swipes.
-
-#### Horizontal View Movement
-
-Move the view horizontally with three-finger horizontal swipes.
+Three-finger swipes pan niri's native layout in both dimensions at once. Horizontal motion moves the active workspace's view, while vertical motion switches workspaces; diagonal swipes do both and each axis settles independently.
 
 #### Open and Close the Overview
 

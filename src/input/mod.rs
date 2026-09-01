@@ -3900,6 +3900,7 @@ impl State {
 
         let is_overview_open = self.niri.layout.is_overview_open();
 
+        let mut pan_delta = (delta_x, delta_y);
         if let Some((cx, cy)) = &mut self.niri.gesture_swipe_3f_cumulative {
             *cx += delta_x;
             *cy += delta_y;
@@ -3908,31 +3909,31 @@ impl State {
             let (cx, cy) = (*cx, *cy);
             if cx * cx + cy * cy >= 16. * 16. {
                 self.niri.gesture_swipe_3f_cumulative = None;
+                pan_delta = (cx, cy);
 
-                if let Some(output) = self.niri.output_under_cursor() {
-                    if cx.abs() > cy.abs() {
-                        let output_ws = if is_overview_open {
-                            self.niri.workspace_under_cursor(true)
-                        } else {
-                            // We don't want to accidentally "catch" the wrong workspace during
-                            // animations.
-                            self.niri.output_under_cursor().and_then(|output| {
-                                let mon = self.niri.layout.monitor_for_output(&output)?;
-                                Some((output, mon.active_workspace_ref()))
-                            })
-                        };
+                let output_ws = if is_overview_open {
+                    self.niri.workspace_under_cursor(true).or_else(|| {
+                        self.niri.output_under_cursor().and_then(|output| {
+                            let mon = self.niri.layout.monitor_for_output(&output)?;
+                            Some((output, mon.active_workspace_ref()))
+                        })
+                    })
+                } else {
+                    // We don't want to accidentally "catch" the wrong workspace during animations.
+                    self.niri.output_under_cursor().and_then(|output| {
+                        let mon = self.niri.layout.monitor_for_output(&output)?;
+                        Some((output, mon.active_workspace_ref()))
+                    })
+                };
 
-                        if let Some((output, ws)) = output_ws {
-                            let ws_idx = self.niri.layout.find_workspace_by_id(ws.id()).unwrap().0;
-                            self.niri
-                                .layout
-                                .view_offset_gesture_begin(&output, Some(ws_idx), true);
-                        }
-                    } else {
-                        self.niri
-                            .layout
-                            .workspace_switch_gesture_begin(&output, true);
-                    }
+                if let Some((output, ws)) = output_ws {
+                    let ws_idx = self.niri.layout.find_workspace_by_id(ws.id()).unwrap().0;
+                    self.niri
+                        .layout
+                        .view_offset_gesture_begin(&output, Some(ws_idx), true);
+                    self.niri
+                        .layout
+                        .workspace_switch_gesture_begin(&output, true);
                 }
             }
         }
@@ -4015,7 +4016,7 @@ impl State {
         let res = self
             .niri
             .layout
-            .workspace_switch_gesture_update(delta_y, timestamp, true);
+            .workspace_switch_gesture_update(pan_delta.1, timestamp, true);
         if let Some(output) = res {
             if let Some(output) = output {
                 self.niri.queue_redraw(&output);
@@ -4026,7 +4027,7 @@ impl State {
         let res = self
             .niri
             .layout
-            .view_offset_gesture_update(delta_x, timestamp, true);
+            .view_offset_gesture_update(pan_delta.0, timestamp, true);
         if let Some(output) = res {
             if let Some(output) = output {
                 self.niri.queue_redraw(&output);
