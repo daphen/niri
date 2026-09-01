@@ -94,6 +94,7 @@ pub struct ScrollingSpace<W: LayoutElement> {
     options: Rc<Options>,
 
     presentation_camera: PresentationCamera,
+    presentation_camera_enabled: bool,
 }
 
 niri_render_elements! {
@@ -397,6 +398,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             clock,
             options,
             presentation_camera: PresentationCamera::new(),
+            presentation_camera_enabled: false,
         }
     }
 
@@ -469,7 +471,8 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         for col in &mut self.columns {
             col.advance_animations();
         }
-        if self.presentation_camera.gesture.is_none()
+        if self.presentation_camera_enabled
+            && self.presentation_camera.gesture.is_none()
             && !self.presentation_camera.x.is_animation()
             && !self.presentation_camera.y.is_animation()
         {
@@ -2483,6 +2486,10 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         old_visual: Option<Point<f64, Logical>>,
         velocity: Point<f64, Logical>,
     ) {
+        if !self.presentation_camera_enabled {
+            self.presentation_camera.reset();
+            return;
+        }
         let target_view_offset = self.view_offset.target();
         self.view_offset = ViewOffset::Static(target_view_offset);
         let Some(old_visual) = old_visual else {
@@ -3220,7 +3227,8 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     }
 
     pub fn presentation_gesture_begin(&mut self) -> bool {
-        if self.columns.is_empty()
+        if !self.presentation_camera_enabled
+            || self.columns.is_empty()
             || self.interactive_resize.is_some()
             || self.is_active_pending_fullscreen()
         {
@@ -3347,6 +3355,27 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
     pub fn reset_presentation_camera(&mut self) {
         self.presentation_camera.reset();
+    }
+
+    pub fn set_presentation_camera_active(&mut self, active: bool, animate: bool) {
+        self.presentation_camera_enabled = active;
+        if !active {
+            self.presentation_camera.reset();
+            return;
+        }
+        let target = self.focused_camera_target();
+        if animate {
+            self.presentation_camera.animate(
+                self.presentation_camera.offset(),
+                target,
+                Point::default(),
+                self.clock.clone(),
+                self.options.animations.horizontal_view_movement.0,
+            );
+        } else {
+            self.presentation_camera.x = CameraAxis::Static(target.x);
+            self.presentation_camera.y = CameraAxis::Static(target.y);
+        }
     }
 
     pub fn view_offset_gesture_begin(&mut self, is_touchpad: bool) {

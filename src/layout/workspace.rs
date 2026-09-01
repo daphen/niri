@@ -1888,6 +1888,11 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.reset_presentation_camera();
     }
 
+    pub fn set_presentation_camera_active(&mut self, active: bool, animate: bool) {
+        self.scrolling
+            .set_presentation_camera_active(active, animate);
+    }
+
     pub fn view_offset_gesture_begin(&mut self, is_touchpad: bool) {
         self.scrolling.view_offset_gesture_begin(is_touchpad);
     }

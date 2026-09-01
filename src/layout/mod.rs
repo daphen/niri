@@ -2699,14 +2699,19 @@ impl<W: LayoutElement> Layout<W> {
             }
         }
 
+        let mut overview_just_closed = false;
         if let Some(OverviewProgress::Animation(anim)) = &mut self.overview_progress {
             if anim.is_done() {
                 if self.overview_open {
                     self.overview_progress = Some(OverviewProgress::Open);
                 } else {
                     self.overview_progress = None;
+                    overview_just_closed = true;
                 }
             }
+        }
+        if overview_just_closed {
+            self.set_monitors_overview_state();
         }
 
         match &mut self.monitor_set {
@@ -4645,6 +4650,7 @@ impl<W: LayoutElement> Layout<W> {
         for mon in monitors {
             mon.overview_open = self.overview_open;
             mon.set_overview_progress(self.overview_progress.as_ref());
+            mon.sync_presentation_camera(true);
         }
     }
 

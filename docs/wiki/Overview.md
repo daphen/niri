@@ -4,6 +4,7 @@
 
 The Overview is a zoomed-out view of your workspaces and windows.
 It lets you see what's going on at a glance, navigate, and drag windows around.
+Tiled-window presentation offsets are suspended so every workspace stays within its overview bounds, then restored for the active workspace after closing.
 
 <video controls src="https://github.com/user-attachments/assets/379a5d1f-acdb-4c11-b36c-e85fd91f0995">
 

@@ -3725,6 +3725,95 @@ fn adjacent_workspaces_have_zero_gap_in_overview() {
 }
 
 #[test]
+fn overview_clears_workspace_cameras_and_restores_only_active() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::FocusWorkspaceDown,
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::FocusWorkspaceUp,
+        Op::CompleteAnimations,
+    ]);
+    assert_ne!(
+        layout
+            .active_workspace()
+            .unwrap()
+            .scrolling()
+            .presentation_offset()
+            .y,
+        0.
+    );
+
+    layout.open_overview();
+
+    let MonitorSet::Normal { monitors, .. } = &layout.monitor_set else {
+        unreachable!()
+    };
+    assert!(monitors[0]
+        .workspaces
+        .iter()
+        .all(|workspace| { workspace.scrolling().presentation_offset() == Point::default() }));
+
+    Op::CompleteAnimations.apply(&mut layout);
+    let MonitorSet::Normal { monitors, .. } = &layout.monitor_set else {
+        unreachable!()
+    };
+    let monitor = &monitors[0];
+    let zoom = monitor.overview_zoom();
+    let extents: Vec<_> = monitor
+        .workspaces_with_render_geo()
+        .filter_map(|(workspace, geo)| {
+            let mut tiles = workspace.tiles_with_render_positions();
+            let (_, first, _) = tiles.next()?;
+            let mut top = geo.loc.y + first.y * zoom;
+            let mut bottom = top;
+            for (tile, pos, visible) in workspace.tiles_with_render_positions() {
+                if visible {
+                    top = top.min(geo.loc.y + pos.y * zoom);
+                    bottom = bottom.max(geo.loc.y + (pos.y + tile.tile_size().h) * zoom);
+                }
+            }
+            Some((top, bottom))
+        })
+        .collect();
+    assert!(extents.windows(2).all(|pair| pair[0].1 <= pair[1].0));
+
+    layout.close_overview();
+    let MonitorSet::Normal { monitors, .. } = &layout.monitor_set else {
+        unreachable!()
+    };
+    assert!(monitors[0]
+        .workspaces
+        .iter()
+        .all(|workspace| { workspace.scrolling().presentation_offset() == Point::default() }));
+    Op::CompleteAnimations.apply(&mut layout);
+
+    assert_eq!(active_window_visual_center_y(&layout), 360.);
+    let MonitorSet::Normal { monitors, .. } = &layout.monitor_set else {
+        unreachable!()
+    };
+    assert!(monitors[0]
+        .workspaces
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| *idx != monitors[0].active_workspace_idx)
+        .all(|(_, workspace)| workspace.scrolling().presentation_offset() == Point::default()));
+
+    layout.overview_gesture_begin();
+    let MonitorSet::Normal { monitors, .. } = &layout.monitor_set else {
+        unreachable!()
+    };
+    assert!(monitors[0]
+        .workspaces
+        .iter()
+        .all(|workspace| { workspace.scrolling().presentation_offset() == Point::default() }));
+}
+
+#[test]
 fn full_height_window_centers_in_effective_working_area() {
     for gap in [0., 4.] {
         let mut options = Options::default();

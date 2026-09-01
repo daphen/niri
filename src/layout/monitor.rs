@@ -329,6 +329,10 @@ impl<W: LayoutElement> Monitor<W> {
 
         let ws = Workspace::new(output.clone(), clock.clone(), options.clone());
         workspaces.push(ws);
+        for workspace in &mut workspaces {
+            workspace.set_presentation_camera_active(false, false);
+        }
+        workspaces[active_workspace_idx].set_presentation_camera_active(true, false);
 
         Self {
             output_name: output.name(),
@@ -357,6 +361,7 @@ impl<W: LayoutElement> Monitor<W> {
 
         for ws in &mut self.workspaces {
             ws.set_output(None);
+            ws.set_presentation_camera_active(false, false);
         }
 
         self.workspaces
@@ -396,6 +401,14 @@ impl<W: LayoutElement> Monitor<W> {
 
     pub fn active_workspace(&mut self) -> &mut Workspace<W> {
         &mut self.workspaces[self.active_workspace_idx]
+    }
+
+    pub(super) fn sync_presentation_camera(&mut self, animate_active: bool) {
+        let normal_view = !self.overview_open && self.overview_progress.is_none();
+        for (idx, workspace) in self.workspaces.iter_mut().enumerate() {
+            let active = normal_view && idx == self.active_workspace_idx;
+            workspace.set_presentation_camera_active(active, active && animate_active);
+        }
     }
 
     pub fn windows(&self) -> impl Iterator<Item = &W> {
@@ -447,13 +460,13 @@ impl<W: LayoutElement> Monitor<W> {
 
         if self.active_workspace_idx != idx {
             self.previous_workspace_id = Some(self.workspaces[self.active_workspace_idx].id());
-            for workspace in &mut self.workspaces {
-                workspace.reset_presentation_camera();
-            }
         }
 
         let prev_active_idx = self.active_workspace_idx;
         self.active_workspace_idx = idx;
+        if prev_active_idx != idx {
+            self.sync_presentation_camera(true);
+        }
 
         let config = config.unwrap_or(self.options.animations.workspace_switch.0);
 
@@ -656,6 +669,7 @@ impl<W: LayoutElement> Monitor<W> {
             assert!(!self.workspaces[1].has_windows_or_name());
             self.workspaces.remove(1);
             self.active_workspace_idx = 0;
+            self.sync_presentation_camera(true);
         }
     }
 
@@ -684,6 +698,7 @@ impl<W: LayoutElement> Monitor<W> {
 
         let mut ws = self.workspaces.remove(idx);
         ws.set_output(None);
+        ws.set_presentation_camera_active(false, false);
 
         // For monitor current workspace removal, we focus previous rather than next (<= rather
         // than <). This is different from columns and tiles, but it lets move-workspace-to-monitor
@@ -694,6 +709,7 @@ impl<W: LayoutElement> Monitor<W> {
 
         self.workspace_switch = None;
         self.clean_up_workspaces();
+        self.sync_presentation_camera(true);
 
         ws
     }
@@ -701,6 +717,7 @@ impl<W: LayoutElement> Monitor<W> {
     pub fn insert_workspace(&mut self, mut ws: Workspace<W>, mut idx: usize, activate: bool) {
         ws.set_output(Some(self.output.clone()));
         ws.update_config(self.options.clone());
+        ws.set_presentation_camera_active(false, false);
 
         // Don't insert past the last empty workspace.
         if idx == self.workspaces.len() {
@@ -735,6 +752,7 @@ impl<W: LayoutElement> Monitor<W> {
         for ws in &mut workspaces {
             ws.set_output(Some(self.output.clone()));
             ws.update_config(self.options.clone());
+            ws.set_presentation_camera_active(false, false);
         }
 
         let empty_was_focused = self.active_workspace_idx == self.workspaces.len() - 1;
@@ -2040,6 +2058,7 @@ impl<W: LayoutElement> Monitor<W> {
                 WorkspaceSwitch::Animation(animation)
             },
         );
+        self.sync_presentation_camera(true);
 
         true
     }
