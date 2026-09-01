@@ -447,6 +447,9 @@ impl<W: LayoutElement> Monitor<W> {
 
         if self.active_workspace_idx != idx {
             self.previous_workspace_id = Some(self.workspaces[self.active_workspace_idx].id());
+            for workspace in &mut self.workspaces {
+                workspace.reset_presentation_camera();
+            }
         }
 
         let prev_active_idx = self.active_workspace_idx;

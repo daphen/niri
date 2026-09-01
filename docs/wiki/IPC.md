@@ -1,6 +1,8 @@
 You can communicate with the running niri instance over an IPC socket.
 Check `niri msg --help` for available commands.
 
+IPC layout data reports native workspace geometry. Temporary presentation-camera offsets used while focusing tiled windows are intentionally not included.
+
 The `--json` flag prints the response in JSON, rather than formatted.
 For example, `niri msg --json outputs`.
 

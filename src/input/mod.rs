@@ -3910,19 +3910,17 @@ impl State {
                 self.niri.gesture_swipe_3f_cumulative = None;
 
                 if let Some(output) = self.niri.output_under_cursor() {
-                    if cx.abs() > cy.abs() {
-                        let output_ws = if is_overview_open {
-                            self.niri.workspace_under_cursor(true)
-                        } else {
-                            // We don't want to accidentally "catch" the wrong workspace during
-                            // animations.
-                            self.niri.output_under_cursor().and_then(|output| {
-                                let mon = self.niri.layout.monitor_for_output(&output)?;
-                                Some((output, mon.active_workspace_ref()))
-                            })
-                        };
-
-                        if let Some((output, ws)) = output_ws {
+                    if !is_overview_open && self.niri.layout.presentation_gesture_begin(&output) {
+                        let pointer = self.niri.seat.get_pointer().unwrap();
+                        if let Some((surface, _)) = &self.niri.pointer_contents.surface {
+                            with_pointer_constraint(surface, &pointer, |constraint| {
+                                if let Some(constraint) = constraint {
+                                    constraint.deactivate();
+                                }
+                            });
+                        }
+                    } else if cx.abs() > cy.abs() {
+                        if let Some((output, ws)) = self.niri.workspace_under_cursor(true) {
                             let ws_idx = self.niri.layout.find_workspace_by_id(ws.id()).unwrap().0;
                             self.niri
                                 .layout
@@ -4012,6 +4010,15 @@ impl State {
         }
 
         let mut handled = false;
+        if let Some(output) = self
+            .niri
+            .layout
+            .presentation_gesture_update(Point::from((delta_x, delta_y)), timestamp)
+        {
+            self.niri.queue_redraw(&output);
+            handled = true;
+        }
+
         let res = self
             .niri
             .layout
@@ -4101,6 +4108,11 @@ impl State {
         }
 
         let mut handled = false;
+        if let Some(output) = self.niri.layout.presentation_gesture_end(event.cancelled()) {
+            self.niri.queue_redraw(&output);
+            handled = true;
+        }
+
         let res = self.niri.layout.workspace_switch_gesture_end(Some(true));
         if let Some(output) = res {
             self.niri.queue_redraw(&output);

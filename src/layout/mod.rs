@@ -3587,6 +3587,54 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
+    pub fn presentation_gesture_begin(&mut self, output: &Output) -> bool {
+        let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set else {
+            return false;
+        };
+        let mut started = false;
+        for monitor in monitors {
+            for (idx, workspace) in monitor.workspaces.iter_mut().enumerate() {
+                if &monitor.output == output && idx == monitor.active_workspace_idx {
+                    started = workspace.presentation_gesture_begin();
+                } else {
+                    workspace.reset_presentation_camera();
+                }
+            }
+        }
+        started
+    }
+
+    pub fn presentation_gesture_update(
+        &mut self,
+        delta: Point<f64, Logical>,
+        timestamp: Duration,
+    ) -> Option<Output> {
+        let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set else {
+            return None;
+        };
+        for monitor in monitors {
+            if monitor.workspaces[monitor.active_workspace_idx]
+                .presentation_gesture_update(delta, timestamp)
+            {
+                return Some(monitor.output.clone());
+            }
+        }
+        None
+    }
+
+    pub fn presentation_gesture_end(&mut self, cancelled: bool) -> Option<Output> {
+        let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set else {
+            return None;
+        };
+        for monitor in monitors {
+            if monitor.workspaces[monitor.active_workspace_idx].presentation_gesture_end(cancelled)
+            {
+                return Some(monitor.output.clone());
+            }
+        }
+        None
+    }
+
     pub fn workspace_switch_gesture_begin(&mut self, output: &Output, is_touchpad: bool) {
         let monitors = match &mut self.monitor_set {
             MonitorSet::Normal { monitors, .. } => monitors,
@@ -3798,6 +3846,13 @@ impl<W: LayoutElement> Layout<W> {
     ) -> bool {
         if self.interactive_move.is_some() {
             return false;
+        }
+
+        for workspace in self.workspaces_mut() {
+            if workspace.has_window(&window_id) {
+                workspace.reset_presentation_camera();
+                break;
+            }
         }
 
         let Some((mon, (ws, ws_geo))) = self.monitors().find_map(|mon| {

@@ -3747,6 +3747,142 @@ fn full_height_window_centers_in_effective_working_area() {
     }
 }
 
+fn tile_render_pos(layout: &Layout<TestWindow>, id: usize) -> Point<f64, Logical> {
+    layout
+        .active_workspace()
+        .unwrap()
+        .tiles_with_render_positions()
+        .find(|(tile, _, _)| tile.window().id() == &id)
+        .unwrap()
+        .1
+}
+
+#[test]
+fn focus_transition_uses_presentation_camera_only() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::CompleteAnimations,
+    ]);
+    let old_visual = tile_render_pos(&layout, 2);
+
+    layout.focus_left();
+
+    let scrolling = layout.active_workspace().unwrap().scrolling();
+    assert_eq!(scrolling.view_pos(), scrolling.target_view_pos());
+    assert_eq!(tile_render_pos(&layout, 1), old_visual);
+    assert_ne!(scrolling.presentation_offset().x, 0.);
+
+    Op::CompleteAnimations.apply(&mut layout);
+    assert_eq!(
+        layout
+            .active_workspace()
+            .unwrap()
+            .scrolling()
+            .presentation_offset()
+            .x,
+        0.
+    );
+}
+
+#[test]
+fn presentation_gesture_moves_only_tiled_windows() {
+    let mut floating = TestWindowParams::new(9);
+    floating.is_floating = true;
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow { params: floating },
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::CompleteAnimations,
+    ]);
+    let output = layout.outputs().next().unwrap().clone();
+    let tiled_before = tile_render_pos(&layout, 2);
+    let floating_before = tile_render_pos(&layout, 9);
+    let ipc_before: Vec<_> = layout
+        .active_workspace()
+        .unwrap()
+        .scrolling()
+        .tiles_with_ipc_layouts()
+        .map(|(_, layout)| layout)
+        .collect();
+
+    assert!(layout.presentation_gesture_begin(&output));
+    assert_eq!(
+        layout.presentation_gesture_update(Point::from((10., 12.)), Duration::from_millis(10)),
+        Some(output.clone())
+    );
+
+    let tiled_after = tile_render_pos(&layout, 2);
+    assert_ne!(tiled_after.x, tiled_before.x);
+    assert_ne!(tiled_after.y, tiled_before.y);
+    assert_eq!(tile_render_pos(&layout, 9), floating_before);
+    assert_eq!(
+        layout
+            .active_workspace()
+            .unwrap()
+            .window_under(tiled_after + Point::from((10., 10.)))
+            .unwrap()
+            .0
+            .id(),
+        &2
+    );
+    let ipc_after: Vec<_> = layout
+        .active_workspace()
+        .unwrap()
+        .scrolling()
+        .tiles_with_ipc_layouts()
+        .map(|(_, layout)| layout)
+        .collect();
+    assert_eq!(ipc_after, ipc_before);
+
+    assert_eq!(layout.presentation_gesture_end(true), Some(output));
+    Op::CompleteAnimations.apply(&mut layout);
+    assert_eq!(tile_render_pos(&layout, 2), tiled_before);
+}
+
+#[test]
+fn fullscreen_resets_presentation_camera() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::CompleteAnimations,
+    ]);
+    let output = layout.outputs().next().unwrap().clone();
+    assert!(layout.presentation_gesture_begin(&output));
+    layout.presentation_gesture_update(Point::from((20., 20.)), Duration::from_millis(10));
+    assert_ne!(
+        layout
+            .active_workspace()
+            .unwrap()
+            .scrolling()
+            .presentation_offset(),
+        Point::default()
+    );
+
+    layout.set_fullscreen(&1, true);
+
+    assert_eq!(
+        layout
+            .active_workspace()
+            .unwrap()
+            .scrolling()
+            .presentation_offset(),
+        Point::default()
+    );
+}
+
 #[test]
 fn workspace_render_geo_at_fractional_scale() {
     let ops = [

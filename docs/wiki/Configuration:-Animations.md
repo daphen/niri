@@ -281,11 +281,11 @@ animations {
 
 #### `horizontal-view-movement`
 
-All horizontal camera view movement animations, such as:
+Tiled-window presentation camera animations, including horizontal scrolling and vertical focus settling:
 
-- When a window off-screen is focused and the camera scrolls to it.
-- When a new window appears off-screen and the camera scrolls to it.
-- After a horizontal touchpad gesture (a spring is recommended).
+- When focus moves to another tiled window.
+- When a new tiled window appears off-screen.
+- After a three-finger touchpad gesture (a spring is recommended).
 
 ```kdl
 animations {

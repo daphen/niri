@@ -1868,6 +1868,26 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.insert_hint_area(position)
     }
 
+    pub fn presentation_gesture_begin(&mut self) -> bool {
+        self.scrolling.presentation_gesture_begin()
+    }
+
+    pub fn presentation_gesture_update(
+        &mut self,
+        delta: Point<f64, Logical>,
+        timestamp: Duration,
+    ) -> bool {
+        self.scrolling.presentation_gesture_update(delta, timestamp)
+    }
+
+    pub fn presentation_gesture_end(&mut self, cancelled: bool) -> bool {
+        self.scrolling.presentation_gesture_end(cancelled)
+    }
+
+    pub fn reset_presentation_camera(&mut self) {
+        self.scrolling.reset_presentation_camera();
+    }
+
     pub fn view_offset_gesture_begin(&mut self, is_touchpad: bool) {
         self.scrolling.view_offset_gesture_begin(is_touchpad);
     }
