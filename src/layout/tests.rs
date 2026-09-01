@@ -3698,6 +3698,33 @@ fn expel_pending_left_from_fullscreen_tabbed_column() {
 }
 
 #[test]
+fn adjacent_workspaces_have_zero_gap_in_overview() {
+    let layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::MoveWindowToWorkspaceDown(true),
+        Op::ToggleOverview,
+        Op::CompleteAnimations,
+    ]);
+
+    let MonitorSet::Normal { monitors, .. } = &layout.monitor_set else {
+        unreachable!()
+    };
+    let geos: Vec<_> = monitors[0]
+        .workspaces_with_render_geo()
+        .map(|(_, geo)| geo)
+        .collect();
+
+    assert!(geos.len() >= 2);
+    assert_eq!(geos[0].loc.y + geos[0].size.h, geos[1].loc.y);
+}
+
+#[test]
 fn full_height_window_centers_in_effective_working_area() {
     for gap in [0., 4.] {
         let mut options = Options::default();
