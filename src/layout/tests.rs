@@ -3790,8 +3790,38 @@ fn focus_transition_uses_presentation_camera_only() {
     );
 }
 
+fn active_window_visual_center_y(layout: &Layout<TestWindow>) -> f64 {
+    let workspace = layout.active_workspace().unwrap();
+    let active = workspace.active_window().unwrap().id();
+    let (tile, pos, _) = workspace
+        .tiles_with_render_positions()
+        .find(|(tile, _, _)| tile.window().id() == active)
+        .unwrap();
+    pos.y + tile.window_loc().y + tile.window_size().h / 2.
+}
+
 #[test]
-fn presentation_gesture_moves_only_tiled_windows() {
+fn focused_window_centers_vertically_within_column() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::ConsumeWindowIntoColumn,
+        Op::CompleteAnimations,
+    ]);
+
+    assert_eq!(active_window_visual_center_y(&layout), 360.);
+    layout.focus_up();
+    Op::CompleteAnimations.apply(&mut layout);
+    assert_eq!(active_window_visual_center_y(&layout), 360.);
+}
+
+#[test]
+fn horizontal_three_finger_selects_nearest_tiled_window() {
     let mut floating = TestWindowParams::new(9);
     floating.is_floating = true;
     let mut layout = check_ops([
@@ -3808,6 +3838,14 @@ fn presentation_gesture_moves_only_tiled_windows() {
     let output = layout.outputs().next().unwrap().clone();
     let tiled_before = tile_render_pos(&layout, 2);
     let floating_before = tile_render_pos(&layout, 9);
+    let target_center_x = layout
+        .active_workspace()
+        .unwrap()
+        .tiles_with_render_positions()
+        .find(|(tile, _, _)| tile.window().id() == &1)
+        .map(|(tile, pos, _)| pos.x + tile.tile_size().w / 2.)
+        .unwrap();
+    let delta_x = -(640. - target_center_x) * 1200. / 1280.;
     let ipc_before: Vec<_> = layout
         .active_workspace()
         .unwrap()
@@ -3818,7 +3856,7 @@ fn presentation_gesture_moves_only_tiled_windows() {
 
     assert!(layout.presentation_gesture_begin(&output));
     assert_eq!(
-        layout.presentation_gesture_update(Point::from((10., 12.)), Duration::from_millis(10)),
+        layout.presentation_gesture_update(Point::from((delta_x, 12.)), Duration::ZERO),
         Some(output.clone())
     );
 
@@ -3845,9 +3883,17 @@ fn presentation_gesture_moves_only_tiled_windows() {
         .collect();
     assert_eq!(ipc_after, ipc_before);
 
-    assert_eq!(layout.presentation_gesture_end(true), Some(output));
+    assert_eq!(layout.presentation_gesture_end(false), Some(output));
     Op::CompleteAnimations.apply(&mut layout);
-    assert_eq!(tile_render_pos(&layout, 2), tiled_before);
+    assert_eq!(
+        layout
+            .active_workspace()
+            .unwrap()
+            .active_window()
+            .unwrap()
+            .id(),
+        &1
+    );
 }
 
 #[test]
@@ -3880,6 +3926,45 @@ fn fullscreen_resets_presentation_camera() {
             .scrolling()
             .presentation_offset(),
         Point::default()
+    );
+}
+
+#[test]
+fn vertical_three_finger_gesture_switches_workspace() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::FocusWorkspaceDown,
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::FocusWorkspaceUp,
+        Op::CompleteAnimations,
+    ]);
+    let output = layout.outputs().next().unwrap().clone();
+    let before = layout
+        .monitor_for_output(&output)
+        .unwrap()
+        .active_workspace_idx;
+
+    layout.workspace_switch_gesture_begin(&output, true);
+    assert!(layout
+        .workspace_switch_gesture_update(800., Duration::ZERO, true)
+        .is_some());
+    assert_eq!(
+        layout.workspace_switch_gesture_end(Some(true)),
+        Some(output.clone())
+    );
+    Op::CompleteAnimations.apply(&mut layout);
+
+    assert_ne!(
+        layout
+            .monitor_for_output(&output)
+            .unwrap()
+            .active_workspace_idx,
+        before
     );
 }
 

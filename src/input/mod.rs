@@ -90,6 +90,25 @@ pub enum PaletteGestureState {
     Ignored,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum Swipe3fTarget {
+    Presentation,
+    View,
+    Workspace,
+}
+
+fn swipe_3f_target(x: f64, y: f64, overview_open: bool) -> Swipe3fTarget {
+    if x.abs() > y.abs() {
+        if overview_open {
+            Swipe3fTarget::View
+        } else {
+            Swipe3fTarget::Presentation
+        }
+    } else {
+        Swipe3fTarget::Workspace
+    }
+}
+
 fn palette_gesture_metrics(opening: bool, tracker: &SwipeTracker) -> (f64, f64) {
     let progress = if opening {
         tracker.pos() / 300.
@@ -3910,26 +3929,34 @@ impl State {
                 self.niri.gesture_swipe_3f_cumulative = None;
 
                 if let Some(output) = self.niri.output_under_cursor() {
-                    if !is_overview_open && self.niri.layout.presentation_gesture_begin(&output) {
-                        let pointer = self.niri.seat.get_pointer().unwrap();
-                        if let Some((surface, _)) = &self.niri.pointer_contents.surface {
-                            with_pointer_constraint(surface, &pointer, |constraint| {
-                                if let Some(constraint) = constraint {
-                                    constraint.deactivate();
+                    match swipe_3f_target(cx, cy, is_overview_open) {
+                        Swipe3fTarget::Presentation => {
+                            if self.niri.layout.presentation_gesture_begin(&output) {
+                                let pointer = self.niri.seat.get_pointer().unwrap();
+                                if let Some((surface, _)) = &self.niri.pointer_contents.surface {
+                                    with_pointer_constraint(surface, &pointer, |constraint| {
+                                        if let Some(constraint) = constraint {
+                                            constraint.deactivate();
+                                        }
+                                    });
                                 }
-                            });
+                            }
                         }
-                    } else if cx.abs() > cy.abs() {
-                        if let Some((output, ws)) = self.niri.workspace_under_cursor(true) {
-                            let ws_idx = self.niri.layout.find_workspace_by_id(ws.id()).unwrap().0;
-                            self.niri
-                                .layout
-                                .view_offset_gesture_begin(&output, Some(ws_idx), true);
+                        Swipe3fTarget::View => {
+                            if let Some((output, ws)) = self.niri.workspace_under_cursor(true) {
+                                let ws_idx =
+                                    self.niri.layout.find_workspace_by_id(ws.id()).unwrap().0;
+                                self.niri.layout.view_offset_gesture_begin(
+                                    &output,
+                                    Some(ws_idx),
+                                    true,
+                                );
+                            }
                         }
-                    } else {
-                        self.niri
+                        Swipe3fTarget::Workspace => self
+                            .niri
                             .layout
-                            .workspace_switch_gesture_begin(&output, true);
+                            .workspace_switch_gesture_begin(&output, true),
                     }
                 }
             }
@@ -5295,6 +5322,13 @@ mod tests {
         tracker.push(75., Duration::ZERO);
         assert_eq!(palette_gesture_metrics(true, &tracker).0, 0.25);
         assert_eq!(palette_gesture_metrics(false, &tracker).0, 0.75);
+    }
+
+    #[test]
+    fn three_finger_axis_routing_preserves_workspace_switching() {
+        assert_eq!(swipe_3f_target(1., 20., false), Swipe3fTarget::Workspace);
+        assert_eq!(swipe_3f_target(20., 1., false), Swipe3fTarget::Presentation);
+        assert_eq!(swipe_3f_target(20., 1., true), Swipe3fTarget::View);
     }
 
     #[test]

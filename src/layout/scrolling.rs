@@ -469,6 +469,14 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         for col in &mut self.columns {
             col.advance_animations();
         }
+        if self.presentation_camera.gesture.is_none()
+            && !self.presentation_camera.x.is_animation()
+            && !self.presentation_camera.y.is_animation()
+        {
+            let target = self.focused_camera_target();
+            self.presentation_camera.x = CameraAxis::Static(target.x);
+            self.presentation_camera.y = CameraAxis::Static(target.y);
+        }
 
         self.closing_windows.retain_mut(|closing| {
             closing.advance_animations();
@@ -884,12 +892,13 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             return;
         }
 
-        self.animate_view_offset_to_column_with_config(
-            None,
-            idx,
-            Some(self.active_column_idx),
-            config,
-        );
+        let new_view_offset =
+            self.compute_new_view_offset_for_column(None, idx, Some(self.active_column_idx));
+        if self.view_offset.is_dnd_scroll() {
+            self.animate_view_offset_with_config(idx, new_view_offset, config);
+        } else {
+            self.view_offset = ViewOffset::Static(new_view_offset);
+        }
 
         if self.active_column_idx != idx {
             self.active_column_idx = idx;
@@ -2454,7 +2463,19 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     }
 
     fn focused_camera_target(&self) -> Point<f64, Logical> {
-        Point::default()
+        let Some(column) = self.columns.get(self.active_column_idx) else {
+            return Point::default();
+        };
+        if !column.sizing_mode().is_normal() {
+            return Point::default();
+        }
+        let Some(native) = self.active_tile_native_pos() else {
+            return Point::default();
+        };
+        let tile = &column.tiles[column.active_tile_idx];
+        let window_center_y = native.y + tile.window_loc().y + tile.window_size().h / 2.;
+        let working_center_y = self.working_area.loc.y + self.working_area.size.h / 2.;
+        Point::from((0., working_center_y - window_center_y))
     }
 
     fn finish_presentation_retarget(

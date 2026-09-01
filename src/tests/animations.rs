@@ -15,6 +15,7 @@ use crate::niri::Niri;
 fn format_tiles(niri: &Niri) -> String {
     let mut buf = String::new();
     let ws = niri.layout.active_workspace().unwrap();
+    let camera = ws.scrolling().presentation_offset();
     let mut tiles: Vec<_> = ws.tiles_with_render_positions().collect();
 
     // We sort by id since that gives us a consistent order (from first opened to last), but we
@@ -23,7 +24,7 @@ fn format_tiles(niri: &Niri) -> String {
     tiles.sort_by_key(|(tile, _, _)| tile.window().id().get());
     for (tile, pos, _visible) in tiles {
         let Size { w, h, .. } = tile.animated_tile_size();
-        let Point { x, y, .. } = pos;
+        let Point { x, y, .. } = pos - camera;
         writeln!(&mut buf, "{w:>3.0} × {h:>3.0} at x:{x:>3.0} y:{y:>3.0}").unwrap();
     }
     buf

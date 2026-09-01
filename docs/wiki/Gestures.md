@@ -52,13 +52,18 @@ Switch workspaces by holding <kbd>Mod</kbd> and the middle mouse button (or the 
 
 ### Touchpad
 
+#### Workspace Switch
+
+Switch workspaces with three-finger vertical swipes.
+
 #### Tiled Window Focus
 
-Move the tiled-window camera with a three-finger swipe in any direction.
+Move the tiled-window camera with a three-finger horizontal swipe.
+After choosing the horizontal axis, diagonal movement also moves the camera vertically.
 Niri projects the swipe and focuses the nearest visible tile, then settles it into view.
 Floating windows and layer-shell surfaces remain fixed.
 
-In the overview, three-finger horizontal and vertical swipes retain their normal view and workspace movement.
+In the overview, horizontal swipes retain their normal view movement.
 
 #### Open and Close the Overview
 
