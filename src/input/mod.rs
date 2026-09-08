@@ -109,8 +109,8 @@ fn palette_gesture_should_open(opening: bool, cancelled: bool, projected_pos: f6
     }
 }
 
-fn is_helium_app_id(app_id: Option<&str>) -> bool {
-    matches!(app_id, Some("browser-personal" | "browser-work"))
+fn should_cycle_helium_palette_tabs(keyboard_focus_is_layout: bool, app_id: Option<&str>) -> bool {
+    keyboard_focus_is_layout && matches!(app_id, Some("browser-personal" | "browser-work"))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -557,9 +557,13 @@ impl State {
                     None
                 };
                 if let Some(direction) = palette_cycle_direction {
+                    let keyboard_focus_is_layout = this.niri.keyboard_focus.is_layout();
                     let helium_focused = this.niri.layout.focus().is_some_and(|mapped| {
                         with_toplevel_role(mapped.toplevel(), |role| {
-                            is_helium_app_id(role.app_id.as_deref())
+                            should_cycle_helium_palette_tabs(
+                                keyboard_focus_is_layout,
+                                role.app_id.as_deref(),
+                            )
                         })
                     });
                     if helium_focused {
@@ -5297,11 +5301,18 @@ mod tests {
     }
 
     #[test]
-    fn palette_tab_cycle_is_scoped_to_helium() {
-        assert!(is_helium_app_id(Some("browser-personal")));
-        assert!(is_helium_app_id(Some("browser-work")));
-        assert!(!is_helium_app_id(Some("kitty")));
-        assert!(!is_helium_app_id(None));
+    fn palette_tab_cycle_requires_layout_focus_on_helium() {
+        assert!(should_cycle_helium_palette_tabs(
+            true,
+            Some("browser-personal")
+        ));
+        assert!(should_cycle_helium_palette_tabs(true, Some("browser-work")));
+        assert!(!should_cycle_helium_palette_tabs(true, Some("kitty")));
+        assert!(!should_cycle_helium_palette_tabs(true, None));
+        assert!(!should_cycle_helium_palette_tabs(
+            false,
+            Some("browser-personal")
+        ));
     }
 
     #[test]
